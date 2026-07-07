@@ -20,12 +20,14 @@ export function isPro(host: ProHost): boolean {
 export function requirePro(
   host: ProHost,
   feature: keyof typeof PRO_UPSELL,
-  action: () => void
+  action: () => void,
+  /** Optional concrete hook shown in the upsell (e.g. the reclaimable total). */
+  context?: string
 ): boolean {
   if (host.isPro) {
     action();
     return true;
   }
-  new ProUpsellModal(host.app, feature).open();
+  new ProUpsellModal(host.app, feature, context).open();
   return false;
 }

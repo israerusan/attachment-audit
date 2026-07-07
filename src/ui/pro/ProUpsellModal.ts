@@ -7,7 +7,12 @@ import { PRO_NAME, PRO_PRICE_LABEL, PRO_TAGLINE, PRO_UPSELL, PURCHASE_URL } from
  * instead of a toast that fades with no next step.
  */
 export class ProUpsellModal extends Modal {
-  constructor(app: App, private feature: keyof typeof PRO_UPSELL) {
+  constructor(
+    app: App,
+    private feature: keyof typeof PRO_UPSELL,
+    /** Optional concrete hook (e.g. "Clear all 143 unused files (2.1 GB) at once."). */
+    private context?: string
+  ) {
     super(app);
   }
 
@@ -15,8 +20,15 @@ export class ProUpsellModal extends Modal {
     const { contentEl } = this;
     this.titleEl.setText(`${PRO_NAME} — ${PRO_PRICE_LABEL}`);
 
-    contentEl.createDiv({ cls: "attachment-manager-upsell-lead", text: PRO_UPSELL[this.feature] });
-    contentEl.createDiv({ cls: "attachment-manager-upsell-sub", text: PRO_TAGLINE });
+    // Lead with the user's concrete payoff when we have one — it converts far
+    // better than a generic feature list at the moment of peak intent.
+    if (this.context) {
+      contentEl.createDiv({ cls: "attachment-manager-upsell-lead", text: this.context });
+      contentEl.createDiv({ cls: "attachment-manager-upsell-sub", text: PRO_UPSELL[this.feature] });
+    } else {
+      contentEl.createDiv({ cls: "attachment-manager-upsell-lead", text: PRO_UPSELL[this.feature] });
+      contentEl.createDiv({ cls: "attachment-manager-upsell-sub", text: PRO_TAGLINE });
+    }
 
     const actions = contentEl.createDiv({ cls: "attachment-manager-upsell-actions" });
     actions.createEl("a", {

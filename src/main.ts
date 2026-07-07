@@ -21,7 +21,7 @@ import { ReviewQueueModal } from "./ui/ReviewQueueModal";
 import { ConfirmModal } from "./ui/ConfirmModal";
 import { scanVault, resolveScanConfig, buildInboundCounts } from "./core/scan/scanVault";
 import { countByType } from "./core/rules/severity";
-import { computeReclaim, type ReclaimBreakdown } from "./core/reclaim/reclaimableSpace";
+import { computeReclaim } from "./core/reclaim/reclaimableSpace";
 import { buildMarkdownReport } from "./core/reports/markdownReport";
 import { issueKey, issueKeyPath } from "./core/utils/ids";
 import { formatBytes } from "./core/utils/sizes";
@@ -40,7 +40,6 @@ type AppInternals = { commands?: CommandsApi };
 export interface ScanRun {
   issues: AttachmentIssue[];
   totalFiles: number;
-  reclaim: ReclaimBreakdown;
   scannedAt: string;
   profileId?: string;
   sortMode: SortMode;
@@ -68,6 +67,8 @@ export default class AttachmentManagerPlugin extends Plugin {
 
   private saveTimer: number | null = null;
   private settleTimer: number | null = null;
+  /** Resolver for the in-flight settle wait, so a superseded wait can't hang. */
+  private settleResolve: (() => void) | null = null;
   private refreshTimer: number | null = null;
   private rescanQueued = false;
   private queuedProfileId?: string;
@@ -185,6 +186,10 @@ export default class AttachmentManagerPlugin extends Plugin {
       window.clearTimeout(this.settleTimer);
       this.settleTimer = null;
     }
+    if (this.settleResolve) {
+      this.settleResolve();
+      this.settleResolve = null;
+    }
     if (this.refreshTimer !== null) {
       window.clearTimeout(this.refreshTimer);
       this.refreshTimer = null;
@@ -276,7 +281,7 @@ export default class AttachmentManagerPlugin extends Plugin {
     try {
       const config = resolveScanConfig(this.settings, profile);
       const now = Date.now();
-      const { issues, totalFiles, reclaim } = await scanVault(
+      const { issues, totalFiles } = await scanVault(
         this.app,
         config,
         this.isPro,
@@ -289,7 +294,7 @@ export default class AttachmentManagerPlugin extends Plugin {
       );
       const scannedAt = new Date(now).toISOString();
 
-      this.lastResult = { issues, totalFiles, reclaim, scannedAt, profileId, sortMode: config.sortMode };
+      this.lastResult = { issues, totalFiles, scannedAt, profileId, sortMode: config.sortMode };
       const outstanding = issues.filter(
         (i) => !this.ignoredSet.has(i.id) && !this.reviewedSet.has(i.id)
       );
@@ -787,10 +792,21 @@ export default class AttachmentManagerPlugin extends Plugin {
 
   async settleCacheThenRescan(paths: string[]): Promise<void> {
     if (paths.length > 0) {
-      if (this.settleTimer !== null) window.clearTimeout(this.settleTimer);
+      // A rapid second call supersedes the first: cancel its timer AND resolve its
+      // pending wait, so the earlier await unblocks instead of hanging forever.
+      if (this.settleTimer !== null) {
+        window.clearTimeout(this.settleTimer);
+        this.settleTimer = null;
+      }
+      if (this.settleResolve) {
+        this.settleResolve();
+        this.settleResolve = null;
+      }
       await new Promise<void>((resolve) => {
+        this.settleResolve = resolve;
         this.settleTimer = window.setTimeout(() => {
           this.settleTimer = null;
+          this.settleResolve = null;
           resolve();
         }, 500);
       });

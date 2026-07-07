@@ -142,6 +142,28 @@ function renderRow(
     });
   });
 
+  // The value action, inline (not buried in the overflow menu): reclaim space in
+  // one click on an unused file — the free "aha" moment.
+  if (issue.issueType === "unused") {
+    const trashBtn = iconButton(
+      actions,
+      "trash-2",
+      `Trash file — free ${formatBytes(issue.sizeBytes)}`,
+      () => {
+        plugin.confirmDestructive(
+          "Trash unused attachment",
+          `Move "${issue.attachmentName}" to trash, freeing ${formatBytes(issue.sizeBytes)}? ${plugin.trashDestinationNote()}`,
+          "Trash file",
+          () =>
+            void plugin.bulkTrashUnused([issue]).then((c) => {
+              if (c.length) void plugin.settleCacheThenRescan(c);
+            })
+        );
+      }
+    );
+    trashBtn.addClass("is-danger");
+  }
+
   const ignoreBtn = iconButton(actions, "eye-off", "Ignore this result", () => {
     void plugin.setIgnored(issue, true).then(() => {
       row.remove();
@@ -198,24 +220,6 @@ function renderRow(
             void plugin.bulkMoveToAttachmentFolder([issue]).then((c) => {
               if (c.length) void plugin.settleCacheThenRescan(c);
             });
-          })
-      );
-    }
-    if (issue.issueType === "unused") {
-      menu.addItem((item) =>
-        item
-          .setTitle("Trash file")
-          .setIcon("trash-2")
-          .onClick(() => {
-            plugin.confirmDestructive(
-              "Trash unused attachment",
-              `Move "${issue.attachmentName}" to trash? ${plugin.trashDestinationNote()}`,
-              "Trash file",
-              () =>
-                void plugin.bulkTrashUnused([issue]).then((c) => {
-                  if (c.length) void plugin.settleCacheThenRescan(c);
-                })
-            );
           })
       );
     }

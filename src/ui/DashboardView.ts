@@ -109,6 +109,13 @@ export class AttachmentManagerView extends ItemView {
       this.sortCache = last.issues;
     }
 
+    // A rename between renders rebuilds issue ids; drop any selection that no
+    // longer exists so the bulk bar's count and actions can't reference stale ids.
+    if (this.selected.size > 0) {
+      const validIds = new Set((this.plugin.lastResult?.issues ?? []).map((i) => i.id));
+      for (const id of this.selected) if (!validIds.has(id)) this.selected.delete(id);
+    }
+
     const issues = this.plugin.visibleIssues();
     const outstandingCounts = countByType(issues.filter((i) => !this.plugin.isReviewed(i)));
     if (this.filter !== "all" && (outstandingCounts[this.filter] ?? 0) === 0) {
@@ -172,7 +179,7 @@ export class AttachmentManagerView extends ItemView {
     card.createDiv({ cls: "attachment-manager-onboarding-blurb", text: CHECK_BLURB });
     card.createDiv({
       cls: "attachment-manager-onboarding-hint",
-      text: "Tip: set an attachment folder in settings to catch misplaced files and enable one-click moves.",
+      text: "Free to scan — and you can trash or move files one at a time at no cost. We show how much space you can reclaim before you touch anything.",
     });
     const btn = card.createEl("button", { text: "Run your first scan", cls: "mod-cta" });
     btn.addEventListener("click", () => void this.plugin.runScan());
@@ -381,10 +388,22 @@ export class AttachmentManagerView extends ItemView {
         this.render();
         return;
       }
-      requirePro(this.plugin, "bulk", () => {
-        this.bulkMode = true;
-        this.render();
-      });
+      const outstanding = this.plugin.visibleIssues().filter((i) => !this.plugin.isReviewed(i));
+      const r = computeReclaim(outstanding);
+      const unusedCount = outstanding.filter((i) => i.issueType === "unused").length;
+      const ctx =
+        unusedCount > 0
+          ? `Clear all ${unusedCount} unused file${unusedCount === 1 ? "" : "s"} (${formatBytes(r.unusedBytes)}) in one click — plus dedupe, move, and rename across many files at once.`
+          : undefined;
+      requirePro(
+        this.plugin,
+        "bulk",
+        () => {
+          this.bulkMode = true;
+          this.render();
+        },
+        ctx
+      );
     });
   }
 
@@ -507,8 +526,23 @@ export class AttachmentManagerView extends ItemView {
       this.plugin.queueSave();
       this.render();
     });
-    card.createEl("strong", { text: `Attachment Manager Pro — ${PRO_PRICE_LABEL}` });
-    card.createDiv({ text: PRO_TAGLINE });
+
+    // Quantify the pitch with what THIS vault can reclaim — far more motivating
+    // than a generic feature list. Fall back to the generic copy when clean.
+    const outstanding = this.plugin.visibleIssues().filter((i) => !this.plugin.isReviewed(i));
+    const reclaim = computeReclaim(outstanding);
+    const unusedCount = outstanding.filter((i) => i.issueType === "unused").length;
+    if (unusedCount > 0 && reclaim.unusedBytes > 0) {
+      card.createEl("strong", { text: `Reclaim ${formatBytes(reclaim.unusedBytes)} in one click` });
+      card.createDiv({
+        text:
+          `${unusedCount} unused file${unusedCount === 1 ? "" : "s"} to clear. Trashing them one at a time is slow — ` +
+          `Pro clears them all (plus dedupe, move, and rename) in a single action. ${PRO_PRICE_LABEL}, no subscription.`,
+      });
+    } else {
+      card.createEl("strong", { text: `Attachment Manager Pro — ${PRO_PRICE_LABEL}` });
+      card.createDiv({ text: PRO_TAGLINE });
+    }
     card.createEl("a", {
       text: `Get Pro — ${PRO_PRICE_LABEL}`,
       cls: "attachment-manager-cta-link",

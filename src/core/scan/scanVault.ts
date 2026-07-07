@@ -337,11 +337,18 @@ function pushHit(
   });
 }
 
-/** Per-attachment inbound reference count from the resolved link graph. */
+/**
+ * Per-attachment inbound reference count from the resolved link graph. Links FROM
+ * our own exported reports are ignored — a report lists each unused attachment as
+ * a `[[wikilink]]`, which would otherwise resolve and permanently suppress that
+ * file's "unused" flag on every subsequent scan.
+ */
 export function buildInboundCounts(app: App): Map<string, number> {
   const inbound = new Map<string, number>();
   const resolved = app.metadataCache.resolvedLinks;
+  const inReports = (p: string): boolean => p === REPORT_FOLDER || p.startsWith(REPORT_FOLDER + "/");
   for (const source of Object.keys(resolved)) {
+    if (inReports(source)) continue;
     const targets = resolved[source];
     for (const target of Object.keys(targets)) {
       if (target === source) continue;
