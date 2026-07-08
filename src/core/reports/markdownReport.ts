@@ -26,7 +26,7 @@ export function buildMarkdownReport(input: ReportInput): string {
   const lines: string[] = [];
   const reclaim = computeReclaim(input.issues);
 
-  lines.push("# Attachment Manager Report");
+  lines.push("# Attachment Audit Report");
   lines.push(`Date: ${input.scannedAt}`);
   if (input.profileName) lines.push(`Profile: ${input.profileName}`);
   lines.push("");

@@ -23,4 +23,17 @@ assert.strictEqual(r2.duplicateExtraBytes, 1000); // keep one of three 500B copi
 const r3 = computeReclaim([makeIssue({ issueType: "duplicate", sizeBytes: 999 })]);
 assert.strictEqual(r3.duplicateExtraBytes, 0);
 
+// A cluster whose copies are ALSO unused: the two figures stay independent and
+// unusedBytes never folds in duplicateExtraBytes (no double-count in the headline).
+const r4 = computeReclaim([
+  makeIssue({ attachmentPath: "x1", issueType: "unused", sizeBytes: 500 }),
+  makeIssue({ attachmentPath: "x1", issueType: "duplicate", clusterId: "h", sizeBytes: 500 }),
+  makeIssue({ attachmentPath: "x2", issueType: "unused", sizeBytes: 500 }),
+  makeIssue({ attachmentPath: "x2", issueType: "duplicate", clusterId: "h", sizeBytes: 500 }),
+  makeIssue({ attachmentPath: "x3", issueType: "unused", sizeBytes: 500 }),
+  makeIssue({ attachmentPath: "x3", issueType: "duplicate", clusterId: "h", sizeBytes: 500 }),
+]);
+assert.strictEqual(r4.unusedBytes, 1500); // 3 distinct unused paths × 500
+assert.strictEqual(r4.duplicateExtraBytes, 1000); // (3 − 1) × 500
+
 console.log("reclaimableSpace tests passed");

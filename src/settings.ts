@@ -251,11 +251,11 @@ export class AttachmentManagerSettingTab extends PluginSettingTab {
           })
         );
       const review = new Setting(containerEl)
-        .setName("Enjoying Attachment Manager?")
+        .setName("Enjoying Attachment Audit?")
         .setDesc("A quick star on GitHub helps other vaults find it.");
       review.controlEl.createEl("a", {
         text: "Leave a review",
-        cls: "attachment-manager-external-btn",
+        cls: "attachment-audit-external-btn",
         href: REVIEW_URL,
       });
       return;
@@ -296,7 +296,7 @@ export class AttachmentManagerSettingTab extends PluginSettingTab {
     );
     actions.controlEl.createEl("a", {
       text: "Get Pro",
-      cls: "attachment-manager-external-btn",
+      cls: "attachment-audit-external-btn",
       href: PURCHASE_URL,
     });
     actions.setDesc(
@@ -432,13 +432,13 @@ export class AttachmentManagerSettingTab extends PluginSettingTab {
   private proHeading(title: string): void {
     const { containerEl } = this;
     const heading = new Setting(containerEl).setName(title).setHeading();
-    heading.nameEl.createSpan({ text: "Pro", cls: "attachment-manager-pro-pill" });
+    heading.nameEl.createSpan({ text: "Pro", cls: "attachment-audit-pro-pill" });
     if (!this.plugin.isPro) {
       const upsell = new Setting(containerEl).setDesc(PRO_TAGLINE);
-      upsell.settingEl.addClass("attachment-manager-locked");
+      upsell.settingEl.addClass("attachment-audit-locked");
       upsell.controlEl.createEl("a", {
         text: "Unlock Pro",
-        cls: "attachment-manager-external-btn",
+        cls: "attachment-audit-external-btn",
         href: PURCHASE_URL,
       });
     }

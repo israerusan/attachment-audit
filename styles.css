@@ -1,25 +1,25 @@
-/* Attachment Manager — all styling lives here (no inline JS styles, per Obsidian review).
+/* Attachment Audit — all styling lives here (no inline JS styles, per Obsidian review).
    Everything is built on Obsidian CSS variables so it adapts to the active theme,
    light or dark, and to the user's interface-font size. */
 
-.attachment-manager-view {
+.attachment-audit-view {
   padding: var(--size-4-3);
   font-size: var(--font-ui-small);
 }
 
 /* Explicit keyboard focus ring — our custom buttons strip native chrome, so give
    them a visible focus indicator that doesn't depend on theme cascade luck. */
-.attachment-manager-row-title:focus-visible,
-.attachment-manager-tile:focus-visible,
-.attachment-manager-icon-btn:focus-visible,
-.attachment-manager-inline-link:focus-visible,
-.attachment-manager-cta-dismiss:focus-visible {
+.attachment-audit-row-title:focus-visible,
+.attachment-audit-tile:focus-visible,
+.attachment-audit-icon-btn:focus-visible,
+.attachment-audit-inline-link:focus-visible,
+.attachment-audit-cta-dismiss:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
   border-radius: var(--radius-s);
 }
 
-.attachment-manager-header {
+.attachment-audit-header {
   display: flex;
   align-items: center;
   gap: var(--size-4-2);
@@ -27,19 +27,19 @@
   margin-bottom: var(--size-4-2);
 }
 
-.attachment-manager-header h2 {
+.attachment-audit-header h2 {
   margin: 0;
   margin-right: auto;
   font-size: var(--font-ui-large);
 }
 
-.attachment-manager-summary {
+.attachment-audit-summary {
   color: var(--text-muted);
   margin-bottom: var(--size-4-3);
 }
 
-.attachment-manager-toolbar,
-.attachment-manager-bulk-bar {
+.attachment-audit-toolbar,
+.attachment-audit-bulk-bar {
   display: flex;
   align-items: center;
   gap: var(--size-4-2);
@@ -47,7 +47,7 @@
   margin-bottom: var(--size-4-2);
 }
 
-.attachment-manager-bulk-bar {
+.attachment-audit-bulk-bar {
   padding: var(--size-4-2);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-s);
@@ -56,13 +56,13 @@
 
 /* Results list */
 
-.attachment-manager-results {
+.attachment-audit-results {
   display: flex;
   flex-direction: column;
   gap: var(--size-2-2);
 }
 
-.attachment-manager-row {
+.attachment-audit-row {
   display: flex;
   align-items: center;
   gap: var(--size-4-2);
@@ -72,15 +72,15 @@
   background: var(--background-primary);
 }
 
-.attachment-manager-row:hover {
+.attachment-audit-row:hover {
   background: var(--background-modifier-hover);
 }
 
-.attachment-manager-row.is-reviewed {
+.attachment-audit-row.is-reviewed {
   opacity: 0.55;
 }
 
-.attachment-manager-row-main {
+.attachment-audit-row-main {
   display: flex;
   flex-direction: column;
   gap: var(--size-2-1);
@@ -88,7 +88,7 @@
   flex: 1;
 }
 
-.attachment-manager-row-title {
+.attachment-audit-row-title {
   /* A focusable button styled as a link (keyboard-operable, no button chrome). */
   appearance: none;
   border: none;
@@ -107,25 +107,25 @@
   width: 100%;
 }
 
-.attachment-manager-row-title:hover {
+.attachment-audit-row-title:hover {
   color: var(--text-accent);
   text-decoration: underline;
 }
 
-.attachment-manager-row-reason {
+.attachment-audit-row-reason {
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.attachment-manager-row-actions {
+.attachment-audit-row-actions {
   display: flex;
   gap: var(--size-2-1);
   flex-shrink: 0;
 }
 
-.attachment-manager-icon-btn {
+.attachment-audit-icon-btn {
   appearance: none;
   border: none;
   background: none;
@@ -139,7 +139,7 @@
   cursor: pointer;
 }
 
-.attachment-manager-icon-btn:hover {
+.attachment-audit-icon-btn:hover {
   background: var(--background-modifier-hover);
   color: var(--text-normal);
 }
@@ -147,13 +147,13 @@
 /* The destructive "ignore" action is set apart (gap + a faint danger tint at rest)
    and turns solid danger on hover, so it never reads like the benign reviewed
    toggle right next to it. */
-.attachment-manager-icon-btn.is-danger {
+.attachment-audit-icon-btn.is-danger {
   margin-left: var(--size-4-1);
   color: var(--text-error);
   opacity: 0.75;
 }
 
-.attachment-manager-icon-btn.is-danger:hover {
+.attachment-audit-icon-btn.is-danger:hover {
   opacity: 1;
   background: var(--background-modifier-error);
   color: var(--text-on-accent);
@@ -163,7 +163,7 @@
 
 /* Type badge is neutral so it doesn't compete with the severity chip's color —
    exactly one channel (severity) carries saturated hue. Type reads from its label. */
-.attachment-manager-badge {
+.attachment-audit-badge {
   flex-shrink: 1;
   min-width: 0;
   max-width: 8em;
@@ -178,7 +178,7 @@
   text-overflow: ellipsis;
 }
 
-.attachment-manager-empty {
+.attachment-audit-empty {
   color: var(--text-muted);
   padding: var(--size-4-4) 0;
   text-align: center;
@@ -186,7 +186,7 @@
 
 /* Pro surfaces */
 
-.attachment-manager-pro-pill {
+.attachment-audit-pro-pill {
   margin-left: var(--size-4-2);
   padding: 0 var(--size-4-1);
   border-radius: var(--radius-s);
@@ -196,11 +196,11 @@
   vertical-align: middle;
 }
 
-.attachment-manager-locked {
+.attachment-audit-locked {
   opacity: 0.9;
 }
 
-.attachment-manager-pro-cta {
+.attachment-audit-pro-cta {
   margin-top: var(--size-4-4);
   padding: var(--size-4-3);
   border: 1px solid var(--background-modifier-border);
@@ -213,8 +213,8 @@
 }
 
 /* Anchor styled as a button (external links routed by Obsidian). */
-.attachment-manager-external-btn,
-a.attachment-manager-cta-link {
+.attachment-audit-external-btn,
+a.attachment-audit-cta-link {
   display: inline-flex;
   align-items: center;
   padding: var(--size-2-2) var(--size-4-3);
@@ -226,8 +226,8 @@ a.attachment-manager-cta-link {
   cursor: pointer;
 }
 
-.attachment-manager-external-btn:hover,
-a.attachment-manager-cta-link:hover {
+.attachment-audit-external-btn:hover,
+a.attachment-audit-cta-link:hover {
   background: var(--interactive-accent-hover);
   color: var(--text-on-accent);
   text-decoration: none;
@@ -235,7 +235,7 @@ a.attachment-manager-cta-link:hover {
 
 /* First-run onboarding */
 
-.attachment-manager-onboarding {
+.attachment-audit-onboarding {
   margin-top: var(--size-4-3);
   padding: var(--size-4-4);
   border: 1px solid var(--background-modifier-border);
@@ -243,17 +243,17 @@ a.attachment-manager-cta-link:hover {
   background: var(--background-secondary);
 }
 
-.attachment-manager-onboarding h3 {
+.attachment-audit-onboarding h3 {
   margin: 0 0 var(--size-2-2);
 }
 
-.attachment-manager-onboarding-blurb {
+.attachment-audit-onboarding-blurb {
   color: var(--text-muted);
   margin-bottom: var(--size-2-3);
   line-height: var(--line-height-normal);
 }
 
-.attachment-manager-onboarding-hint {
+.attachment-audit-onboarding-hint {
   color: var(--text-faint);
   font-size: var(--font-ui-smaller);
   margin-bottom: var(--size-4-3);
@@ -261,7 +261,7 @@ a.attachment-manager-cta-link:hover {
 
 /* Determinate scan progress */
 
-.attachment-manager-progress {
+.attachment-audit-progress {
   height: 4px;
   border-radius: 2px;
   background: var(--background-modifier-border);
@@ -269,7 +269,7 @@ a.attachment-manager-cta-link:hover {
   margin-top: var(--size-2-2);
 }
 
-.attachment-manager-progress-bar {
+.attachment-audit-progress-bar {
   height: 100%;
   width: 0;
   background: var(--interactive-accent);
@@ -277,29 +277,29 @@ a.attachment-manager-cta-link:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .attachment-manager-progress-bar {
+  .attachment-audit-progress-bar {
     transition: none;
   }
 }
 
 /* Contextual "add required properties" nudge */
-.attachment-manager-nudge {
+.attachment-audit-nudge {
   margin-top: var(--size-4-2);
   color: var(--text-faint);
   font-size: var(--font-ui-smaller);
 }
 
 /* Pro upsell modal */
-.attachment-manager-upsell-lead {
+.attachment-audit-upsell-lead {
   margin-bottom: var(--size-2-2);
 }
 
-.attachment-manager-upsell-sub {
+.attachment-audit-upsell-sub {
   color: var(--text-muted);
   margin-bottom: var(--size-4-3);
 }
 
-.attachment-manager-upsell-actions {
+.attachment-audit-upsell-actions {
   display: flex;
   gap: var(--size-4-2);
   align-items: center;
@@ -307,47 +307,47 @@ a.attachment-manager-cta-link:hover {
 
 /* Windowed results: "show more" footer */
 
-.attachment-manager-results-footer {
+.attachment-audit-results-footer {
   display: flex;
   justify-content: center;
   margin-top: var(--size-4-2);
 }
 
-.attachment-manager-results-footer:empty {
+.attachment-audit-results-footer:empty {
   margin-top: 0;
 }
 
 /* Header stat + category tiles */
 
-.attachment-manager-meta {
+.attachment-audit-meta {
   margin-bottom: var(--size-4-3);
 }
 
-.attachment-manager-stat {
+.attachment-audit-stat {
   display: flex;
   align-items: baseline;
   gap: var(--size-2-2);
 }
 
-.attachment-manager-stat-num {
+.attachment-audit-stat-num {
   font-size: 2em;
   font-weight: var(--font-bold);
   line-height: 1;
   color: var(--text-normal);
 }
 
-.attachment-manager-stat-label {
+.attachment-audit-stat-label {
   color: var(--text-muted);
 }
 
-.attachment-manager-tiles {
+.attachment-audit-tiles {
   display: flex;
   flex-wrap: wrap;
   gap: var(--size-2-2);
   margin-top: var(--size-4-2);
 }
 
-.attachment-manager-tile {
+.attachment-audit-tile {
   appearance: none;
   box-shadow: none;
   font: inherit;
@@ -362,26 +362,26 @@ a.attachment-manager-cta-link:hover {
   cursor: pointer;
 }
 
-button.attachment-manager-tile:hover {
+button.attachment-audit-tile:hover {
   background: var(--background-modifier-hover);
 }
 
-.attachment-manager-tile.is-static {
+.attachment-audit-tile.is-static {
   cursor: default;
 }
 
-.attachment-manager-tile.is-active {
+.attachment-audit-tile.is-active {
   border-color: var(--interactive-accent);
   background: var(--background-modifier-hover);
 }
 
-.attachment-manager-tile-count {
+.attachment-audit-tile-count {
   font-size: var(--font-ui-large);
   font-weight: var(--font-semibold);
   color: var(--text-normal);
 }
 
-.attachment-manager-tile-label {
+.attachment-audit-tile-label {
   font-size: var(--font-ui-smaller);
   color: var(--text-muted);
   white-space: nowrap;
@@ -389,7 +389,7 @@ button.attachment-manager-tile:hover {
 
 /* Severity tier chip (letter + color, so it's legible without relying on hue) */
 
-.attachment-manager-sev {
+.attachment-audit-sev {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
@@ -405,11 +405,11 @@ button.attachment-manager-tile:hover {
   color: #fff;
 }
 
-.attachment-manager-sev.is-high { background: var(--color-red); }
-.attachment-manager-sev.is-med { background: var(--color-orange); color: #1a1a1a; }
-.attachment-manager-sev.is-low { background: var(--background-modifier-border); color: var(--text-normal); }
+.attachment-audit-sev.is-high { background: var(--color-red); }
+.attachment-audit-sev.is-med { background: var(--color-orange); color: #1a1a1a; }
+.attachment-audit-sev.is-low { background: var(--background-modifier-border); color: var(--text-normal); }
 
-.attachment-manager-row-folder {
+.attachment-audit-row-folder {
   color: var(--text-faint);
   font-size: var(--font-ui-smaller);
   overflow: hidden;
@@ -417,13 +417,13 @@ button.attachment-manager-tile:hover {
   white-space: nowrap;
 }
 
-.attachment-manager-review-legend {
+.attachment-audit-review-legend {
   color: var(--text-faint);
   font-size: var(--font-ui-smaller);
   margin: var(--size-4-2) 0;
 }
 
-.attachment-manager-inline-link {
+.attachment-audit-inline-link {
   appearance: none;
   border: none;
   background: none;
@@ -435,74 +435,74 @@ button.attachment-manager-tile:hover {
   text-decoration: underline;
 }
 
-.attachment-manager-icon-btn.is-active {
+.attachment-audit-icon-btn.is-active {
   color: var(--text-success);
 }
 
 /* Review queue modal */
 
-.attachment-manager-review-count {
+.attachment-audit-review-count {
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
 }
 
-.attachment-manager-review-header {
+.attachment-audit-review-header {
   display: flex;
   align-items: center;
   gap: var(--size-4-2);
   margin-top: var(--size-2-2);
 }
 
-.attachment-manager-reviewed-tag {
+.attachment-audit-reviewed-tag {
   color: var(--text-success);
   font-size: var(--font-ui-smaller);
 }
 
-.attachment-manager-review-title {
+.attachment-audit-review-title {
   margin: var(--size-4-2) 0 var(--size-2-2);
 }
 
-.attachment-manager-review-reason {
+.attachment-audit-review-reason {
   color: var(--text-normal);
   margin-bottom: var(--size-2-2);
 }
 
-.attachment-manager-review-path {
+.attachment-audit-review-path {
   color: var(--text-faint);
   font-size: var(--font-ui-smaller);
   margin-bottom: var(--size-4-3);
 }
 
-.attachment-manager-review-actions {
+.attachment-audit-review-actions {
   display: flex;
   flex-wrap: wrap;
   gap: var(--size-2-2);
   margin-bottom: var(--size-4-3);
 }
 
-.attachment-manager-review-action {
+.attachment-audit-review-action {
   display: inline-flex;
   align-items: center;
   gap: var(--size-2-2);
 }
 
-.attachment-manager-review-nav {
+.attachment-audit-review-nav {
   display: flex;
   justify-content: space-between;
   gap: var(--size-4-2);
 }
 
-.attachment-manager-legend {
+.attachment-audit-legend {
   color: var(--text-faint);
   font-size: var(--font-ui-smaller);
   margin-top: var(--size-2-2);
 }
 
-.attachment-manager-pro-cta {
+.attachment-audit-pro-cta {
   position: relative;
 }
 
-.attachment-manager-cta-dismiss {
+.attachment-audit-cta-dismiss {
   appearance: none;
   border: none;
   background: none;
@@ -516,27 +516,27 @@ button.attachment-manager-tile:hover {
   cursor: pointer;
 }
 
-.attachment-manager-header-upsell {
+.attachment-audit-header-upsell {
   font-size: var(--font-ui-smaller);
   color: var(--text-accent);
 }
 
 /* Reclaimable-space banner — the headline metric, given prominence. */
-.attachment-manager-reclaim {
+.attachment-audit-reclaim {
   margin-top: var(--size-2-2);
   font-weight: var(--font-semibold);
   color: var(--text-success);
 }
 
 /* Free-trial hint in the bulk bar */
-.attachment-manager-trial-note {
+.attachment-audit-trial-note {
   color: var(--text-accent);
   font-size: var(--font-ui-smaller);
   margin-right: var(--size-4-2);
 }
 
 /* Confirm modal body (destructive actions) */
-.attachment-manager-confirm-body {
+.attachment-audit-confirm-body {
   margin-bottom: var(--size-4-3);
   line-height: var(--line-height-normal);
   color: var(--text-normal);

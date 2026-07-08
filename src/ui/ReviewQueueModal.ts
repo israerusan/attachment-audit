@@ -22,7 +22,7 @@ export class ReviewQueueModal extends Modal {
 
   onOpen(): void {
     this.titleEl.setText("Review flagged attachments");
-    this.modalEl.addClass("attachment-manager-review-modal");
+    this.modalEl.addClass("attachment-audit-review-modal");
     this.registerKeys();
     this.renderCurrent();
   }
@@ -63,27 +63,27 @@ export class ReviewQueueModal extends Modal {
     }
 
     contentEl.createDiv({
-      cls: "attachment-manager-review-count",
+      cls: "attachment-audit-review-count",
       text: `${this.index + 1} of ${this.queue.length}`,
     });
 
-    const header = contentEl.createDiv({ cls: "attachment-manager-review-header" });
+    const header = contentEl.createDiv({ cls: "attachment-audit-review-header" });
     header.createSpan({
-      cls: `attachment-manager-badge is-${issue.issueType}`,
+      cls: `attachment-audit-badge is-${issue.issueType}`,
       text: ISSUE_TYPE_LABELS[issue.issueType],
     });
     if (this.plugin.isReviewed(issue)) {
-      header.createSpan({ cls: "attachment-manager-reviewed-tag", text: "Reviewed" });
+      header.createSpan({ cls: "attachment-audit-reviewed-tag", text: "Reviewed" });
     }
 
-    contentEl.createEl("h3", { text: issue.attachmentName, cls: "attachment-manager-review-title" });
+    contentEl.createEl("h3", { text: issue.attachmentName, cls: "attachment-audit-review-title" });
     contentEl.createDiv({
-      cls: "attachment-manager-review-reason",
+      cls: "attachment-audit-review-reason",
       text: `${issue.details ?? issue.reason} · ${formatBytes(issue.sizeBytes)}`,
     });
-    contentEl.createDiv({ cls: "attachment-manager-review-path", text: issue.attachmentPath });
+    contentEl.createDiv({ cls: "attachment-audit-review-path", text: issue.attachmentPath });
 
-    const actions = contentEl.createDiv({ cls: "attachment-manager-review-actions" });
+    const actions = contentEl.createDiv({ cls: "attachment-audit-review-actions" });
     this.actionButton(actions, "file-search", "Open (o)", () => void this.openCurrent());
     this.actionButton(
       actions,
@@ -95,11 +95,11 @@ export class ReviewQueueModal extends Modal {
     this.actionButton(actions, "ban", "Exclude (e)", () => void this.excludeCurrent());
 
     contentEl.createDiv({
-      cls: "attachment-manager-review-legend",
+      cls: "attachment-audit-review-legend",
       text: "← → navigate · r review · i ignore · e exclude · o open",
     });
 
-    const nav = contentEl.createDiv({ cls: "attachment-manager-review-nav" });
+    const nav = contentEl.createDiv({ cls: "attachment-audit-review-nav" });
     const prev = nav.createEl("button", { text: "Previous" });
     prev.disabled = this.index === 0;
     prev.addEventListener("click", () => this.move(-1));
@@ -114,7 +114,7 @@ export class ReviewQueueModal extends Modal {
     tooltip: string,
     onClick: () => void
   ): void {
-    const btn = parent.createEl("button", { cls: "attachment-manager-review-action" });
+    const btn = parent.createEl("button", { cls: "attachment-audit-review-action" });
     const iconEl = btn.createSpan();
     setIcon(iconEl, icon);
     btn.createSpan({ text: tooltip });

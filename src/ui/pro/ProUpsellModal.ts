@@ -29,17 +29,17 @@ export class ProUpsellModal extends Modal {
     // Lead with the user's concrete payoff when we have one — it converts far
     // better than a generic feature list at the moment of peak intent.
     if (this.context) {
-      contentEl.createDiv({ cls: "attachment-manager-upsell-lead", text: this.context });
-      contentEl.createDiv({ cls: "attachment-manager-upsell-sub", text: PRO_UPSELL[this.feature] });
+      contentEl.createDiv({ cls: "attachment-audit-upsell-lead", text: this.context });
+      contentEl.createDiv({ cls: "attachment-audit-upsell-sub", text: PRO_UPSELL[this.feature] });
     } else {
-      contentEl.createDiv({ cls: "attachment-manager-upsell-lead", text: PRO_UPSELL[this.feature] });
-      contentEl.createDiv({ cls: "attachment-manager-upsell-sub", text: PRO_TAGLINE });
+      contentEl.createDiv({ cls: "attachment-audit-upsell-lead", text: PRO_UPSELL[this.feature] });
+      contentEl.createDiv({ cls: "attachment-audit-upsell-sub", text: PRO_TAGLINE });
     }
 
-    const actions = contentEl.createDiv({ cls: "attachment-manager-upsell-actions" });
+    const actions = contentEl.createDiv({ cls: "attachment-audit-upsell-actions" });
     actions.createEl("a", {
       text: `Get Pro — ${PRO_PRICE_LABEL}`,
-      cls: "attachment-manager-cta-link",
+      cls: "attachment-audit-cta-link",
       href: PURCHASE_URL,
     });
     const haveKey = actions.createEl("button", { text: "I have a license key" });
@@ -52,7 +52,7 @@ export class ProUpsellModal extends Modal {
         setting.open();
         setting.openTabById?.(PRODUCT_ID);
       } else {
-        new Notice("Open Settings → Community plugins → Attachment Manager → Pro license and paste your key.");
+        new Notice("Open Settings → Community plugins → Attachment Audit → Pro license and paste your key.");
       }
     });
   }

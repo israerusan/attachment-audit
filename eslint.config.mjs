@@ -39,7 +39,7 @@ export default tseslint.config(
 		},
 		rules: {
 			// `ui/sentence-case` with enforceCamelCaseLower fires on our product name
-			// ("Attachment Manager", "Pro", "GitHub", "CSV", "Markdown") — lowercasing them would
+			// ("Attachment Audit", "Pro", "GitHub", "CSV", "Markdown") — lowercasing them would
 			// be wrong, and the actual review does not flag these strings.
 			"obsidianmd/ui/sentence-case": "off",
 			// Advises the declarative settings API added in Obsidian 1.13.0; this plugin

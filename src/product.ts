@@ -2,19 +2,19 @@
 // the license binding, upsell surfaces, and settings copy consistent.
 
 /** Signed into every license payload; a key only unlocks the product it names. */
-export const PRODUCT_ID = "attachment-manager";
+export const PRODUCT_ID = "attachment-audit";
 
 /** Plugin-owned folder for exported reports; always skipped by scans. */
-export const REPORT_FOLDER = "Attachment Manager Reports";
+export const REPORT_FOLDER = "Attachment Audit Reports";
 
-export const PRODUCT_NAME = "Attachment Manager";
-export const PRO_NAME = "Attachment Manager Pro";
+export const PRODUCT_NAME = "Attachment Audit";
+export const PRO_NAME = "Attachment Audit Pro";
 
 /** Where "Unlock Pro" sends people. Confirm the real handle before release. */
-export const PURCHASE_URL = "https://buymeacoffee.com/attachmentmanager";
+export const PURCHASE_URL = "https://github.com/israerusan/attachment-audit#pro";
 
 /** Where a happy user can leave a star/review (helps discovery). */
-export const REVIEW_URL = "https://github.com/israerusan/attachment-manager";
+export const REVIEW_URL = "https://github.com/israerusan/attachment-audit";
 
 /** One-time price. Kept in one place so every surface stays consistent. */
 export const PRO_PRICE_LABEL = "$9 one-time";

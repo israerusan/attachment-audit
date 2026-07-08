@@ -9,12 +9,12 @@ import { renderResultsList } from "./ResultsList";
 import { requirePro } from "./pro/ProGate";
 import { PRO_PRICE_LABEL, PRO_TAGLINE, PURCHASE_URL } from "../product";
 
-export const VIEW_TYPE_ATTACHMENT_MANAGER = "attachment-manager-dashboard";
+export const VIEW_TYPE_ATTACHMENT_MANAGER = "attachment-audit-dashboard";
 
 type Filter = IssueType | "all";
 
 const CHECK_BLURB =
-  "Attachment Manager cross-checks canvas, frontmatter, and HTML before flagging anything unused, so it won't remove a file that's still in use — then helps you reclaim space from unused files, duplicates, oversized files, and junk-named pastes, safely.";
+  "Attachment Audit cross-checks canvas, frontmatter, and HTML before flagging anything unused, so it won't remove a file that's still in use — then helps you reclaim space from unused files, duplicates, oversized files, and junk-named pastes, safely.";
 
 export class AttachmentManagerView extends ItemView {
   private filter: Filter = "all";
@@ -47,7 +47,7 @@ export class AttachmentManagerView extends ItemView {
   }
 
   getDisplayText(): string {
-    return "Attachment Manager";
+    return "Attachment Audit";
   }
 
   getIcon(): string {
@@ -75,7 +75,7 @@ export class AttachmentManagerView extends ItemView {
   render(): void {
     const root = this.contentEl;
     root.empty();
-    root.addClass("attachment-manager-view");
+    root.addClass("attachment-audit-view");
     this.metaEl = null;
     this.summaryEl = null;
     this.progressEl = null;
@@ -86,7 +86,7 @@ export class AttachmentManagerView extends ItemView {
     this.renderHeader(root);
 
     if (this.plugin.scanning && !this.plugin.lastResult) {
-      this.metaEl = root.createDiv({ cls: "attachment-manager-meta" });
+      this.metaEl = root.createDiv({ cls: "attachment-audit-meta" });
       this.renderScanningMeta();
       return;
     }
@@ -95,7 +95,7 @@ export class AttachmentManagerView extends ItemView {
       if (!this.plugin.settings.onboardingDismissed) {
         this.renderOnboarding(root);
       } else {
-        this.metaEl = root.createDiv({ cls: "attachment-manager-meta" });
+        this.metaEl = root.createDiv({ cls: "attachment-audit-meta" });
         this.renderHydratedMeta(root);
         if (!this.plugin.isPro) this.renderProCta(root);
       }
@@ -124,7 +124,7 @@ export class AttachmentManagerView extends ItemView {
       this.filter = "all";
     }
 
-    this.metaEl = root.createDiv({ cls: "attachment-manager-meta" });
+    this.metaEl = root.createDiv({ cls: "attachment-audit-meta" });
     this.renderMeta(issues);
     this.renderToolbar(root);
     if (this.bulkMode) this.renderBulkBar(root);
@@ -144,8 +144,8 @@ export class AttachmentManagerView extends ItemView {
   }
 
   private renderHeader(root: HTMLElement): void {
-    const header = root.createDiv({ cls: "attachment-manager-header" });
-    header.createEl("h2", { text: "Attachment Manager" });
+    const header = root.createDiv({ cls: "attachment-audit-header" });
+    header.createEl("h2", { text: "Attachment Audit" });
     const btn = header.createEl("button", {
       text: this.plugin.scanning ? "Scanning…" : "Run scan",
       cls: "mod-cta",
@@ -156,14 +156,14 @@ export class AttachmentManagerView extends ItemView {
     if (!this.plugin.isPro && this.plugin.settings.proCtaDismissed) {
       header.createEl("a", {
         text: "Upgrade to Pro",
-        cls: "attachment-manager-header-upsell",
+        cls: "attachment-audit-header-upsell",
         href: PURCHASE_URL,
       });
     }
 
     const profiles = this.plugin.settings.savedProfiles;
     if (this.plugin.isPro && profiles.length > 0) {
-      const select = header.createEl("select", { cls: "dropdown attachment-manager-profile-select" });
+      const select = header.createEl("select", { cls: "dropdown attachment-audit-profile-select" });
       select.setAttribute("aria-label", "Run a saved scan profile");
       select.createEl("option", { text: "Run a profile…", value: "" });
       for (const p of profiles) select.createEl("option", { text: p.name, value: p.id });
@@ -177,11 +177,11 @@ export class AttachmentManagerView extends ItemView {
   }
 
   private renderOnboarding(root: HTMLElement): void {
-    const card = root.createDiv({ cls: "attachment-manager-onboarding" });
+    const card = root.createDiv({ cls: "attachment-audit-onboarding" });
     card.createEl("h3", { text: "Reclaim space in your vault" });
-    card.createDiv({ cls: "attachment-manager-onboarding-blurb", text: CHECK_BLURB });
+    card.createDiv({ cls: "attachment-audit-onboarding-blurb", text: CHECK_BLURB });
     card.createDiv({
-      cls: "attachment-manager-onboarding-hint",
+      cls: "attachment-audit-onboarding-hint",
       text: "Free to scan — and you can trash or move files one at a time at no cost. We show how much space you can reclaim before you touch anything.",
     });
     const btn = card.createEl("button", { text: "Run your first scan", cls: "mod-cta" });
@@ -192,11 +192,11 @@ export class AttachmentManagerView extends ItemView {
     const host = this.metaEl;
     if (!host) return;
     host.empty();
-    const stat = host.createDiv({ cls: "attachment-manager-stat" });
-    stat.createSpan({ cls: "attachment-manager-stat-label", text: "Scanning your vault…" });
-    this.summaryEl = host.createDiv({ cls: "attachment-manager-summary" });
-    const track = host.createDiv({ cls: "attachment-manager-progress" });
-    this.progressEl = track.createDiv({ cls: "attachment-manager-progress-bar" });
+    const stat = host.createDiv({ cls: "attachment-audit-stat" });
+    stat.createSpan({ cls: "attachment-audit-stat-label", text: "Scanning your vault…" });
+    this.summaryEl = host.createDiv({ cls: "attachment-audit-summary" });
+    const track = host.createDiv({ cls: "attachment-audit-progress" });
+    this.progressEl = track.createDiv({ cls: "attachment-audit-progress-bar" });
     this.showScanProgress(this.plugin.scanDone, this.plugin.scanTotal);
   }
 
@@ -209,28 +209,28 @@ export class AttachmentManagerView extends ItemView {
     }
     host.empty();
     const affected = summary.affectedAttachments ?? summary.totalIssues;
-    const stat = host.createDiv({ cls: "attachment-manager-stat" });
-    stat.createSpan({ cls: "attachment-manager-stat-num", text: String(affected) });
+    const stat = host.createDiv({ cls: "attachment-audit-stat" });
+    stat.createSpan({ cls: "attachment-audit-stat-num", text: String(affected) });
     stat.createSpan({
-      cls: "attachment-manager-stat-label",
+      cls: "attachment-audit-stat-label",
       text: affected === 1 ? "attachment needs attention" : "attachments need attention",
     });
     if (summary.reclaimableBytes > 0) {
       host.createDiv({
-        cls: "attachment-manager-reclaim",
+        cls: "attachment-audit-reclaim",
         text: `♻ ${formatBytes(summary.reclaimableBytes)} reclaimable`,
       });
     }
     host
-      .createDiv({ cls: "attachment-manager-summary" })
+      .createDiv({ cls: "attachment-audit-summary" })
       .setText(`Last scan ${relativeTime(summary.scannedAt)} · run a scan to review`);
-    const tiles = host.createDiv({ cls: "attachment-manager-tiles" });
+    const tiles = host.createDiv({ cls: "attachment-audit-tiles" });
     for (const type of ISSUE_TYPES) {
       const count = summary.byType[type] ?? 0;
       if (count === 0) continue;
-      const tile = tiles.createDiv({ cls: "attachment-manager-tile is-static" });
-      tile.createDiv({ cls: "attachment-manager-tile-count", text: String(count) });
-      tile.createDiv({ cls: "attachment-manager-tile-label", text: ISSUE_TYPE_LABELS[type] });
+      const tile = tiles.createDiv({ cls: "attachment-audit-tile is-static" });
+      tile.createDiv({ cls: "attachment-audit-tile-count", text: String(count) });
+      tile.createDiv({ cls: "attachment-audit-tile-label", text: ISSUE_TYPE_LABELS[type] });
     }
   }
 
@@ -244,10 +244,10 @@ export class AttachmentManagerView extends ItemView {
     const reviewedCount = issues.length - outstanding.length;
     const reclaim = computeReclaim(outstanding);
 
-    const stat = host.createDiv({ cls: "attachment-manager-stat" });
-    stat.createSpan({ cls: "attachment-manager-stat-num", text: String(affected) });
+    const stat = host.createDiv({ cls: "attachment-audit-stat" });
+    stat.createSpan({ cls: "attachment-audit-stat-num", text: String(affected) });
     stat.createSpan({
-      cls: "attachment-manager-stat-label",
+      cls: "attachment-audit-stat-label",
       text:
         affected === 0
           ? issues.length === 0
@@ -264,19 +264,19 @@ export class AttachmentManagerView extends ItemView {
           ? ` · ${formatBytes(reclaim.duplicateExtraBytes)} in duplicate copies (review)`
           : "";
       host.createDiv({
-        cls: "attachment-manager-reclaim",
+        cls: "attachment-audit-reclaim",
         text: `♻ ${formatBytes(reclaim.unusedBytes)} reclaimable now${dup}`,
       });
     } else if (reclaim.duplicateExtraBytes > 0) {
       // No safely-reclaimable unused bytes — lead with the duplicate figure so the
       // banner never shows a misleading "0 B reclaimable now".
       host.createDiv({
-        cls: "attachment-manager-reclaim",
+        cls: "attachment-audit-reclaim",
         text: `♻ ${formatBytes(reclaim.duplicateExtraBytes)} in duplicate copies (review)`,
       });
     }
 
-    this.summaryEl = host.createDiv({ cls: "attachment-manager-summary" });
+    this.summaryEl = host.createDiv({ cls: "attachment-audit-summary" });
     const last = this.plugin.lastResult;
     if (this.plugin.scanning) {
       this.summaryEl.setText(
@@ -284,8 +284,8 @@ export class AttachmentManagerView extends ItemView {
           ? `Scanning ${this.plugin.scanDone} / ${this.plugin.scanTotal}…`
           : "Scanning…"
       );
-      const track = host.createDiv({ cls: "attachment-manager-progress" });
-      this.progressEl = track.createDiv({ cls: "attachment-manager-progress-bar" });
+      const track = host.createDiv({ cls: "attachment-audit-progress" });
+      this.progressEl = track.createDiv({ cls: "attachment-audit-progress-bar" });
       this.showScanProgress(this.plugin.scanDone, this.plugin.scanTotal);
     } else if (last) {
       const issueWord = issues.length === 1 ? "issue" : "issues";
@@ -305,7 +305,7 @@ export class AttachmentManagerView extends ItemView {
 
     if (outstanding.length > 0) {
       host.createDiv({
-        cls: "attachment-manager-legend",
+        cls: "attachment-audit-legend",
         text: "Severity: H high · M medium · L low",
       });
     }
@@ -313,7 +313,7 @@ export class AttachmentManagerView extends ItemView {
 
   private renderTiles(host: HTMLElement, issues: AttachmentIssue[]): void {
     const counts = countByType(issues);
-    const tiles = host.createDiv({ cls: "attachment-manager-tiles" });
+    const tiles = host.createDiv({ cls: "attachment-audit-tiles" });
     this.tile(tiles, "All", issues.length, this.filter === "all", () => {
       this.setFilter("all");
     });
@@ -332,10 +332,10 @@ export class AttachmentManagerView extends ItemView {
     active: boolean,
     onClick: () => void
   ): void {
-    const tile = host.createEl("button", { cls: "attachment-manager-tile" });
+    const tile = host.createEl("button", { cls: "attachment-audit-tile" });
     if (active) tile.addClass("is-active");
-    tile.createDiv({ cls: "attachment-manager-tile-count", text: String(count) });
-    tile.createDiv({ cls: "attachment-manager-tile-label", text: label });
+    tile.createDiv({ cls: "attachment-audit-tile-count", text: String(count) });
+    tile.createDiv({ cls: "attachment-audit-tile-label", text: label });
     tile.addEventListener("click", onClick);
   }
 
@@ -377,7 +377,7 @@ export class AttachmentManagerView extends ItemView {
   }
 
   private renderToolbar(root: HTMLElement): void {
-    const bar = root.createDiv({ cls: "attachment-manager-toolbar" });
+    const bar = root.createDiv({ cls: "attachment-audit-toolbar" });
 
     const sort = bar.createEl("select", { cls: "dropdown" });
     sort.setAttribute("aria-label", "Sort results");
@@ -407,7 +407,7 @@ export class AttachmentManagerView extends ItemView {
     if (!this.bulkMode && !this.plugin.isPro) {
       // Advertise the one-time free trial until it's spent, then the Pro gate.
       const label = this.plugin.settings.bulkTrialUsed ? "Pro" : "Free trial";
-      bulk.createSpan({ cls: "attachment-manager-pro-pill", text: label });
+      bulk.createSpan({ cls: "attachment-audit-pro-pill", text: label });
     }
     bulk.addEventListener("click", () => {
       if (this.bulkMode) {
@@ -437,10 +437,10 @@ export class AttachmentManagerView extends ItemView {
   }
 
   private renderBulkBar(root: HTMLElement): void {
-    const bar = root.createDiv({ cls: "attachment-manager-bulk-bar" });
+    const bar = root.createDiv({ cls: "attachment-audit-bulk-bar" });
     if (!this.plugin.isPro && !this.plugin.settings.bulkTrialUsed) {
       bar.createSpan({
-        cls: "attachment-manager-trial-note",
+        cls: "attachment-audit-trial-note",
         text: "Free trial: your first bulk cleanup is on us.",
       });
     }
@@ -458,7 +458,7 @@ export class AttachmentManagerView extends ItemView {
       if (nowAll) shown.forEach((i) => this.selected.delete(i.id));
       else shown.forEach((i) => this.selected.add(i.id));
       if (this.resultsEl) {
-        this.resultsEl.querySelectorAll("input.attachment-manager-check").forEach((el) => {
+        this.resultsEl.querySelectorAll("input.attachment-audit-check").forEach((el) => {
           (el as HTMLInputElement).checked = !nowAll;
         });
       }
@@ -479,7 +479,7 @@ export class AttachmentManagerView extends ItemView {
     this.bulkButton(bar, "Trash unused", () => {
       const unused = selectedIssues().filter((i) => i.issueType === "unused");
       if (unused.length === 0) {
-        new Notice("Attachment Manager: none of the selected items are unused.");
+        new Notice("Attachment Audit: none of the selected items are unused.");
         return;
       }
       const bytes = computeReclaim(unused).unusedBytes;
@@ -494,7 +494,7 @@ export class AttachmentManagerView extends ItemView {
     this.bulkButton(bar, "Trash duplicate copies", () => {
       const dups = selectedIssues().filter((i) => i.issueType === "duplicate");
       if (dups.length === 0) {
-        new Notice("Attachment Manager: none of the selected items are duplicates.");
+        new Notice("Attachment Audit: none of the selected items are duplicates.");
         return;
       }
       this.plugin.confirmDestructive(
@@ -511,7 +511,7 @@ export class AttachmentManagerView extends ItemView {
       if (sel.length === 0) return;
       const folder = this.plugin.settings.attachmentFolder.trim();
       if (!folder) {
-        new Notice("Attachment Manager: set an attachment folder in settings first.");
+        new Notice("Attachment Audit: set an attachment folder in settings first.");
         return;
       }
       this.plugin.confirmDestructive(
@@ -550,7 +550,7 @@ export class AttachmentManagerView extends ItemView {
       this.plugin.settings.bulkTrialUsed = true;
       this.plugin.queueSave();
       new Notice(
-        "That was your free bulk cleanup — Attachment Manager Pro unlocks unlimited one-click cleanup."
+        "That was your free bulk cleanup — Attachment Audit Pro unlocks unlimited one-click cleanup."
       );
     }
     if (changed.length === 0) {
@@ -562,8 +562,8 @@ export class AttachmentManagerView extends ItemView {
 
   private renderProCta(root: HTMLElement): void {
     if (this.plugin.settings.proCtaDismissed) return;
-    const card = root.createDiv({ cls: "attachment-manager-pro-cta" });
-    const dismiss = card.createEl("button", { cls: "attachment-manager-cta-dismiss", text: "×" });
+    const card = root.createDiv({ cls: "attachment-audit-pro-cta" });
+    const dismiss = card.createEl("button", { cls: "attachment-audit-cta-dismiss", text: "×" });
     dismiss.setAttribute("aria-label", "Dismiss");
     dismiss.addEventListener("click", () => {
       this.plugin.settings.proCtaDismissed = true;
@@ -584,12 +584,12 @@ export class AttachmentManagerView extends ItemView {
           `Pro clears them all (plus dedupe, move, and rename) in a single action. ${PRO_PRICE_LABEL}, no subscription.`,
       });
     } else {
-      card.createEl("strong", { text: `Attachment Manager Pro — ${PRO_PRICE_LABEL}` });
+      card.createEl("strong", { text: `Attachment Audit Pro — ${PRO_PRICE_LABEL}` });
       card.createDiv({ text: PRO_TAGLINE });
     }
     card.createEl("a", {
       text: `Get Pro — ${PRO_PRICE_LABEL}`,
-      cls: "attachment-manager-cta-link",
+      cls: "attachment-audit-cta-link",
       href: PURCHASE_URL,
     });
   }

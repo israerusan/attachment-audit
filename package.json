@@ -1,7 +1,7 @@
 {
-  "name": "attachment-manager",
+  "name": "attachment-audit",
   "version": "1.0.0",
-  "description": "Find unused files, duplicates, oversized files, and misplaced attachments, then clean them up and reclaim space.",
+  "description": "Audit attachments for true orphans, duplicates, oversized files, and misplaced files, then clean them up safely.",
   "main": "main.js",
   "type": "module",
   "scripts": {

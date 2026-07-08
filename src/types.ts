@@ -1,4 +1,4 @@
-// The shared data contract for Attachment Manager. Detectors, the rule engine,
+// The shared data contract for Attachment Audit. Detectors, the rule engine,
 // severity scoring, reports, and the UI all speak these types. Kept
 // dependency-free (no `obsidian` import) so the core is pure and unit-testable
 // under Node.

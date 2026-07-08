@@ -14,7 +14,7 @@ const md = buildMarkdownReport({
   ],
 });
 
-assert.ok(md.includes("# Attachment Manager Report"));
+assert.ok(md.includes("# Attachment Audit Report"));
 assert.ok(md.includes("Profile: Monthly cleanup"));
 assert.ok(md.includes("Attachments scanned: 42"));
 assert.ok(md.includes("Reclaimable now (unused): 2 MB"));

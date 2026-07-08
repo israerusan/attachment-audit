@@ -10,7 +10,7 @@ const { verifyLicense } = await import(
   pathToFileURL(path.join(root, "src", "shared", "verifyLicense.mjs")).href
 );
 
-const PRODUCT = "attachment-manager";
+const PRODUCT = "attachment-audit";
 
 function b64url(bytes) {
   return Buffer.from(bytes)

@@ -51,12 +51,12 @@ export function renderResultsList(
   opts: ResultsListOptions
 ): void {
   if (issues.length === 0) {
-    container.createDiv({ cls: "attachment-manager-empty", text: "No issues here. Nice and tidy." });
+    container.createDiv({ cls: "attachment-audit-empty", text: "No issues here. Nice and tidy." });
     return;
   }
 
-  const list = container.createDiv({ cls: "attachment-manager-results" });
-  const footer = container.createDiv({ cls: "attachment-manager-results-footer" });
+  const list = container.createDiv({ cls: "attachment-audit-results" });
+  const footer = container.createDiv({ cls: "attachment-audit-results-footer" });
   const rowsByPath = new Map<string, HTMLElement[]>();
   let shown = 0;
 
@@ -85,14 +85,14 @@ function renderRow(
   opts: ResultsListOptions,
   rowsByPath: Map<string, HTMLElement[]>
 ): void {
-  const row = list.createDiv({ cls: "attachment-manager-row" });
+  const row = list.createDiv({ cls: "attachment-audit-row" });
   if (plugin.isReviewed(issue)) row.addClass("is-reviewed");
   const bucket = rowsByPath.get(issue.attachmentPath) ?? [];
   bucket.push(row);
   rowsByPath.set(issue.attachmentPath, bucket);
 
   if (opts.bulkMode) {
-    const check = row.createEl("input", { type: "checkbox", cls: "attachment-manager-check" });
+    const check = row.createEl("input", { type: "checkbox", cls: "attachment-audit-check" });
     check.checked = opts.selected.has(issue.id);
     check.setAttribute("aria-label", `Select ${issue.attachmentName}`);
     check.addEventListener("change", () => {
@@ -103,29 +103,29 @@ function renderRow(
   }
 
   const tier = severityTier(issue.severity);
-  const tierEl = row.createSpan({ cls: `attachment-manager-sev ${tier.cls}`, text: tier.label[0] });
+  const tierEl = row.createSpan({ cls: `attachment-audit-sev ${tier.cls}`, text: tier.label[0] });
   tierEl.setAttribute("aria-label", `${tier.label} severity`);
 
   if (opts.showBadge) {
     row.createSpan({
-      cls: `attachment-manager-badge is-${issue.issueType}`,
+      cls: `attachment-audit-badge is-${issue.issueType}`,
       text: BADGE_LABELS[issue.issueType],
     });
   }
 
-  const main = row.createDiv({ cls: "attachment-manager-row-main" });
-  const title = main.createEl("button", { cls: "attachment-manager-row-title", text: issue.attachmentName });
+  const main = row.createDiv({ cls: "attachment-audit-row-main" });
+  const title = main.createEl("button", { cls: "attachment-audit-row-title", text: issue.attachmentName });
   title.setAttribute("aria-label", issue.attachmentPath);
   title.addEventListener("click", () => void plugin.openAttachment(issue.attachmentPath));
   const slash = issue.attachmentPath.lastIndexOf("/");
   if (slash > 0) {
-    main.createDiv({ cls: "attachment-manager-row-folder", text: issue.attachmentPath.slice(0, slash) });
+    main.createDiv({ cls: "attachment-audit-row-folder", text: issue.attachmentPath.slice(0, slash) });
   }
   const reason = `${issue.reason} · ${formatBytes(issue.sizeBytes)}`;
-  const reasonEl = main.createDiv({ cls: "attachment-manager-row-reason", text: reason });
+  const reasonEl = main.createDiv({ cls: "attachment-audit-row-reason", text: reason });
   reasonEl.setAttribute("aria-label", issue.details ?? reason);
 
-  const actions = row.createDiv({ cls: "attachment-manager-row-actions" });
+  const actions = row.createDiv({ cls: "attachment-audit-row-actions" });
   iconButton(actions, "check", "Mark reviewed", () => {
     void plugin.setReviewed(issue, true).then(() => {
       row.remove();
@@ -133,7 +133,7 @@ function renderRow(
       // Match Ignore's undo affordance so an accidental review is recoverable.
       const frag = createFragment((f) => {
         f.appendText(`Marked "${issue.attachmentName}" reviewed. `);
-        const undo = f.createEl("button", { text: "Undo", cls: "attachment-manager-inline-link" });
+        const undo = f.createEl("button", { text: "Undo", cls: "attachment-audit-inline-link" });
         undo.addEventListener("click", () => {
           void plugin.setReviewed(issue, false).then(() => plugin.refreshViews());
         });
@@ -173,7 +173,7 @@ function renderRow(
       opts.onCountsChanged();
       const frag = createFragment((f) => {
         f.appendText(`Ignored "${issue.attachmentName}". `);
-        const undo = f.createEl("button", { text: "Undo", cls: "attachment-manager-inline-link" });
+        const undo = f.createEl("button", { text: "Undo", cls: "attachment-audit-inline-link" });
         undo.addEventListener("click", () => {
           void plugin.setIgnored(issue, false).then(() => plugin.refreshViews());
         });
@@ -254,7 +254,7 @@ function iconButton(
   tooltip: string,
   onClick?: (evt: MouseEvent) => void
 ): HTMLButtonElement {
-  const btn = parent.createEl("button", { cls: "attachment-manager-icon-btn clickable-icon" });
+  const btn = parent.createEl("button", { cls: "attachment-audit-icon-btn clickable-icon" });
   setIcon(btn, icon);
   if (tooltip) btn.setAttribute("aria-label", tooltip);
   if (onClick) btn.addEventListener("click", onClick);

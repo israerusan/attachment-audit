@@ -14,7 +14,8 @@ import { fileNameVariants } from "./mentionMatcher";
  * up front lets `isMentioned` do a plain case-insensitive substring test.
  */
 export function buildMentionCorpus(sources: string[]): string {
-  return sources.join("\n").toLowerCase();
+  // NFC-normalize so NFD-composed references match NFC filenames (see fileNameVariants).
+  return sources.join("\n").normalize("NFC").toLowerCase();
 }
 
 /**

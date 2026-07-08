@@ -32,7 +32,7 @@ export function verifyLicense(licenseKey, product, publicKeyB64) {
 
     const payload = JSON.parse(new TextDecoder().decode(payloadBytes));
     if (payload.product !== product) {
-      return { valid: false, error: "This key is not for Attachment Manager Pro." };
+      return { valid: false, error: "This key is not for Attachment Audit Pro." };
     }
 
     return { valid: true, email: payload.email };

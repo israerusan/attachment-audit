@@ -28,6 +28,7 @@ import {
 } from "./core/scan/scanVault";
 import { countByType } from "./core/rules/severity";
 import { computeReclaim } from "./core/reclaim/reclaimableSpace";
+import { selectDuplicateCopiesToTrash } from "./core/dedupe/duplicateTrashSelection";
 import { buildMarkdownReport } from "./core/reports/markdownReport";
 import { issueKey, issueKeyPath } from "./core/utils/ids";
 import { formatBytes } from "./core/utils/sizes";
@@ -88,7 +89,7 @@ export default class AttachmentManagerPlugin extends Plugin {
 
     this.registerView(VIEW_TYPE_ATTACHMENT_MANAGER, (leaf) => new AttachmentManagerView(leaf, this));
 
-    this.addRibbonIcon("paperclip", "Open Attachment Manager", () => {
+    this.addRibbonIcon("paperclip", "Open Attachment Audit", () => {
       void this.activateView();
     });
 
@@ -327,7 +328,7 @@ export default class AttachmentManagerPlugin extends Plugin {
         );
       }
     } catch (err) {
-      console.error("Attachment Manager: scan failed", err);
+      console.error("Attachment Audit: scan failed", err);
       new Notice(`${PRODUCT_NAME}: scan failed. See the console for details.`);
     } finally {
       this.scanning = false;
@@ -387,7 +388,7 @@ export default class AttachmentManagerPlugin extends Plugin {
     await this.saveSettings();
     const frag = createFragment((f) => {
       f.appendText(`Excluded "${path}" from future scans. `);
-      const undo = f.createEl("button", { text: "Undo", cls: "attachment-manager-inline-link" });
+      const undo = f.createEl("button", { text: "Undo", cls: "attachment-audit-inline-link" });
       undo.addEventListener("click", () => void this.unexcludeAttachment(path));
     });
     new Notice(frag, 6000);
@@ -589,6 +590,21 @@ export default class AttachmentManagerPlugin extends Plugin {
   }
 
   /**
+   * Case-insensitive path existence check. `getAbstractFileByPath` is case-
+   * sensitive, but macOS/Windows filesystems are not — so a move/rename target
+   * that differs only in case from an existing sibling must count as a collision.
+   */
+  private pathExistsCI(target: string): boolean {
+    if (this.app.vault.getAbstractFileByPath(target)) return true;
+    const slash = target.lastIndexOf("/");
+    const dir = slash === -1 ? "" : target.slice(0, slash);
+    const nameLower = target.slice(slash + 1).toLowerCase();
+    const folder = dir ? this.app.vault.getAbstractFileByPath(dir) : this.app.vault.getRoot();
+    const children = (folder as { children?: Array<{ name: string }> } | null)?.children;
+    return children ? children.some((c) => c.name.toLowerCase() === nameLower) : false;
+  }
+
+  /**
    * Paths the last scan flagged "unused" — i.e. that passed the full two-signal
    * safety check (no resolved inbound link AND no filename mention in any note,
    * canvas, frontmatter, or text-attachment source). Only these are ever
@@ -639,7 +655,7 @@ export default class AttachmentManagerPlugin extends Plugin {
         await this.app.fileManager.trashFile(file);
         trashed.push(path);
       } catch (err) {
-        console.error(`Attachment Manager: could not trash ${path}`, err);
+        console.error(`Attachment Audit: could not trash ${path}`, err);
         failed++;
       }
     }
@@ -664,34 +680,12 @@ export default class AttachmentManagerPlugin extends Plugin {
     const inbound = this.inboundMap();
     const unused = this.unusedPathSet();
     const bytesByPath = new Map(selected.map((i) => [i.attachmentPath, i.sizeBytes]));
-    // Full cluster membership from the last scan, so "keep one" counts every copy.
-    const membersByCluster = new Map<string, string[]>();
-    for (const i of this.lastResult?.issues ?? []) {
-      if (i.issueType === "duplicate" && i.clusterId) {
-        const b = membersByCluster.get(i.clusterId) ?? [];
-        if (!b.includes(i.attachmentPath)) b.push(i.attachmentPath);
-        membersByCluster.set(i.clusterId, b);
-      }
-    }
-    const selectedByCluster = new Map<string, string[]>();
-    for (const i of selected) {
-      if (i.issueType !== "duplicate" || !i.clusterId) continue;
-      const b = selectedByCluster.get(i.clusterId) ?? [];
-      if (!b.includes(i.attachmentPath)) b.push(i.attachmentPath);
-      selectedByCluster.set(i.clusterId, b);
-    }
-
-    const toTrash: string[] = [];
-    for (const [cid, sel] of selectedByCluster) {
-      const members = membersByCluster.get(cid) ?? sel;
-      // Eligible = selected copies that are two-signal unused AND still unreferenced.
-      const eligible = sel.filter((p) => unused.has(p) && (inbound.get(p) ?? 0) <= 0);
-      const survivors = members.filter((p) => !eligible.includes(p));
-      let trashList = eligible;
-      // Never remove the last surviving copy of the content.
-      if (survivors.length === 0 && trashList.length > 0) trashList = trashList.slice(1);
-      toTrash.push(...trashList);
-    }
+    const toTrash = selectDuplicateCopiesToTrash(
+      selected,
+      this.lastResult?.issues ?? [],
+      unused,
+      inbound
+    );
 
     if (toTrash.length === 0) {
       new Notice(
@@ -717,7 +711,7 @@ export default class AttachmentManagerPlugin extends Plugin {
         await this.app.fileManager.trashFile(file);
         trashed.push(path);
       } catch (err) {
-        console.error(`Attachment Manager: could not trash ${path}`, err);
+        console.error(`Attachment Audit: could not trash ${path}`, err);
         failed++;
       }
     }
@@ -760,13 +754,13 @@ export default class AttachmentManagerPlugin extends Plugin {
       if (!file) { skipped++; continue; }
       const desired = moveTargetPath(path, normFolder);
       if (desired === path) { skipped++; continue; } // already there
-      const target = uniquePath(desired, (p) => this.app.vault.getAbstractFileByPath(p) !== null);
-      if (this.app.vault.getAbstractFileByPath(target)) { skipped++; continue; }
+      const target = uniquePath(desired, (p) => this.pathExistsCI(p));
+      if (this.pathExistsCI(target)) { skipped++; continue; }
       try {
         await this.app.fileManager.renameFile(file, target);
         moved.push(target);
       } catch (err) {
-        console.error(`Attachment Manager: could not move ${path}`, err);
+        console.error(`Attachment Audit: could not move ${path}`, err);
         failed++;
       }
     }
@@ -785,8 +779,15 @@ export default class AttachmentManagerPlugin extends Plugin {
       new Notice(`${PRODUCT_NAME}: a scan is running — try again in a moment.`);
       return null;
     }
-    const clean = newBasename.trim().replace(/[\\/:*?"<>|]/g, "");
-    if (!clean) {
+    // Strip control chars (without a control-char regex), illegal path chars, and
+    // trailing dots/spaces (Windows silently drops those, diverging the stored
+    // path from the real file). Reject reserved Windows device names.
+    const clean = Array.from(newBasename.trim())
+      .filter((c) => c.charCodeAt(0) >= 32)
+      .join("")
+      .replace(/[\\/:*?"<>|]/g, "")
+      .replace(/[. ]+$/, "");
+    if (!clean || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(clean)) {
       new Notice(`${PRODUCT_NAME}: enter a valid name.`);
       return null;
     }
@@ -796,10 +797,10 @@ export default class AttachmentManagerPlugin extends Plugin {
     const fileName = ext ? `${clean}.${ext}` : clean;
     const desired = joinPath(dirName(path), fileName);
     if (desired === path) return path;
-    const target = uniquePath(desired, (p) => this.app.vault.getAbstractFileByPath(p) !== null);
-    // Never rename onto an existing file (mirrors the move guard) — uniquePath can
-    // return a colliding path only in the pathological exhaustion case.
-    if (this.app.vault.getAbstractFileByPath(target)) {
+    const target = uniquePath(desired, (p) => this.pathExistsCI(p));
+    // Never rename onto an existing file (case-insensitive; uniquePath can return a
+    // colliding path only in the pathological exhaustion case).
+    if (this.pathExistsCI(target)) {
       new Notice(`${PRODUCT_NAME}: a file named "${attachmentBaseName(target)}" already exists.`);
       return null;
     }
@@ -808,7 +809,7 @@ export default class AttachmentManagerPlugin extends Plugin {
       new Notice(`${PRODUCT_NAME}: renamed to ${attachmentBaseName(target)}.`);
       return target;
     } catch (err) {
-      console.error(`Attachment Manager: could not rename ${path}`, err);
+      console.error(`Attachment Audit: could not rename ${path}`, err);
       new Notice(`${PRODUCT_NAME}: rename failed. See the console.`);
       return null;
     }
@@ -876,7 +877,7 @@ export default class AttachmentManagerPlugin extends Plugin {
         // A <button> (not a bare <a>) so it's keyboard- and screen-reader-operable.
         const b = f.createEl("button", {
           text: "Clear every unused file in one click with Pro →",
-          cls: "attachment-manager-inline-link",
+          cls: "attachment-audit-inline-link",
         });
         b.addEventListener("click", () =>
           new ProUpsellModal(
@@ -986,7 +987,7 @@ export default class AttachmentManagerPlugin extends Plugin {
       await this.app.workspace.getLeaf(false).openFile(file);
       new Notice(`${PRODUCT_NAME}: report exported.`);
     } catch (err) {
-      console.error("Attachment Manager: report export failed", err);
+      console.error("Attachment Audit: report export failed", err);
       new Notice(`${PRODUCT_NAME}: could not write the report. See the console for details.`);
     }
   }

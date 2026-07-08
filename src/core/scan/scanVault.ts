@@ -172,7 +172,7 @@ export async function scanVault(
         const batch = sources.slice(i, i + READ_BATCH);
         const texts = await Promise.all(batch.map((s) => readSourceText(app, s).catch(() => "")));
         for (const text of texts) {
-          if (text) matcher.scanInto(text.toLowerCase(), hits);
+          if (text) matcher.scanInto(text.normalize("NFC").toLowerCase(), hits);
           await maybeYield();
         }
       }
@@ -268,7 +268,7 @@ export async function findMentionedAttachments(
         })
       )
     );
-    for (const text of texts) if (text) matcher.scanInto(text.toLowerCase(), hits);
+    for (const text of texts) if (text) matcher.scanInto(text.normalize("NFC").toLowerCase(), hits);
   }
 
   // A source we couldn't read might contain the only reference — never trash then.

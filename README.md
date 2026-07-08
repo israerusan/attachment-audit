@@ -1,92 +1,130 @@
-# Attachment Manager
+# Attachment Audit
 
-**The attachment cleaner for Obsidian you can trust with bulk delete.** It cross-checks canvas, frontmatter, and HTML before flagging anything "unused," so it won't remove a file that's still in use — then clears unused files, duplicates, oversized images, and junk-named pastes, and shows the space you'll get back. Free to scan and reclaim one file at a time; Pro adds one-click bulk cleanup.
+**The safest way to find attachment bloat before you delete a damn thing.**
 
-[**➜ Unlock Pro — $9 one-time**](https://buymeacoffee.com/attachmentmanager) · no subscription · no account · works offline
+Attachment Audit scans your vault for truly unused attachments, duplicates, oversized files, junk-named pastes, and misplaced files — then shows exactly what is reclaimable before you touch anything.
 
-> **Safe by design:** nothing is hard-deleted (files go to trash, fully recoverable), and every move/rename updates your links automatically. [How safety works ↓](#is-it-safe-yes--heres-how)
+Free lets you scan and clean one file at a time. Pro unlocks bulk cleanup, saved scan profiles, custom rules, severity tuning, and Markdown reports.
 
-<!-- TODO: screenshot — dashboard with the reclaimable-space hero -->
+> Built for the moment when "I think these files are junk" is not good enough and you want evidence before you start deleting.
 
-Your vault is quietly hoarding megabytes of attachments no note uses anymore — duplicates, oversized images, and junk-named pastes. Attachment Manager finds them, shows you exactly how much space you'll get back, and cleans them up **safely** — every action is **recoverable** and **link-safe**.
+<!-- TODO: screenshot — dashboard with reclaimable-space hero -->
+
+## Why Attachment Audit exists
+
+Most attachment tools optimize for naming or filing. Useful, sure. But that is not the scary part.
+
+The scary part is cleanup:
+- which files are truly unused
+- which ones are duplicated waste
+- which giant files are eating your vault alive
+- which ones can be moved or trashed safely
+
+Attachment Audit exists to make that decision with evidence instead of vibes.
 
 ## What it finds
 
-- **Unused** — attachments no note references. A deliberately conservative two-signal check (resolved links **and** a raw-content scan of note bodies, frontmatter, and canvas) catches references that link-only tools miss — a file embedded only in a canvas or a raw `<img>` tag is never mistaken for junk.
-- **Duplicates** — byte-identical copies (SHA-256, size-bucketed so large unique files are never read).
-- **Large files** — anything over your size threshold, so you can spot the megabytes.
-- **Poorly named** — auto-generated names like `Pasted image 20260101…`, `Screenshot …`, `IMG_1234`, `Untitled`.
-- **Misplaced** — attachments living outside your configured attachment folder.
+- **Unused** — attachments no note truly references
+- **Duplicates** — byte-identical copies grouped with SHA-256
+- **Large files** — oversized attachments worth reviewing first
+- **Poorly named** — junk like `Pasted image...`, `Screenshot...`, `IMG_1234`, or `Untitled`
+- **Misplaced** — attachments living outside your chosen attachment folder
 
-The dashboard shows a running **reclaimable-space** total, per-category tiles, and a one-at-a-time review queue.
+## Why it is safer than a generic orphan finder
 
-<!-- TODO: screenshot — per-category tiles + one-at-a-time review queue -->
+Attachment Audit does not flag an attachment as unused from resolved Markdown links alone.
 
-## How this is different from the free attachment plugins
+It cross-checks two independent signals:
+- resolved links
+- a raw-content mention scan across note bodies, frontmatter, and canvas files
 
-The Obsidian ecosystem has free tools that rename pasted images, and one or two that list "orphaned" attachments. If those cover you, use them. Attachment Manager exists for the moment you want to actually **delete in bulk without gambling** — and for having every job in one tool instead of three.
+That means a file referenced only in canvas, frontmatter, or raw HTML is far less likely to be misclassified as trash.
 
-- **It won't false-delete a file that's still in use.** Most free orphan-finders flag a file "unused" from resolved Markdown links alone — so they miss attachments referenced only in **canvas files, YAML frontmatter, or raw `<img src>` HTML**, and cheerfully offer to delete them. Attachment Manager requires **two independent signals** to agree (resolved links **and** a raw-content scan of note bodies, frontmatter, and canvas) before anything is ever flagged. It is biased toward *not* flagging.
-- **Nothing is hard-deleted.** Files go to your Obsidian trash (system trash or `.trash/`) and are fully recoverable. Free "delete" scripts often unlink permanently.
-- **Moves and renames keep your links intact**, using Obsidian's link-updating rename.
-- **It shows the payoff before you touch anything** — a live reclaimable-space total.
-- **One tool, five detectors** — unused, duplicate (SHA-256), large, junk-named, and misplaced — instead of stitching together a renamer plus an orphan-lister plus a manual dedupe.
+It also keeps cleanup sane:
+- nothing is hard-deleted
+- moves and renames preserve links
+- duplicate cleanup never trashes every copy
+- destructive actions re-validate before acting
 
 ## Free vs Pro
 
-The free tier finds everything and lets you clean up file-by-file. Pro is about doing it in bulk.
+Free proves value. Pro is for doing cleanup at scale.
 
-| | Free | Pro — **$9 one-time** |
-|---|:---:|:---:|
-| All five detectors (unused, duplicate, large, poorly-named, misplaced) | ✓ | ✓ |
-| Dashboard with reclaimable-space total + per-type breakdown | ✓ | ✓ |
-| Reclaim one file at a time (trash / move from its row) | ✓ | ✓ |
-| Open, reveal, rename (link-safe), ignore, exclude, mark reviewed | ✓ | ✓ |
-| Per-detector thresholds, folders, junk-name patterns, exclusions | ✓ | ✓ |
-| **Bulk cleanup** — trash unused, dedupe, and move across many files at once | | ✓ |
-| Saved scan profiles | | ✓ |
-| Custom rules (extension, size, folder, name, age) | | ✓ |
-| Severity tuning | | ✓ |
-| Markdown report export | | ✓ |
+| Feature | Free | Pro |
+| --- | :---: | :---: |
+| All five detectors | ✓ | ✓ |
+| Dashboard with reclaimable-space total | ✓ | ✓ |
+| One-file-at-a-time cleanup | ✓ | ✓ |
+| Open / reveal / rename / ignore / exclude / mark reviewed | ✓ | ✓ |
+| Per-detector thresholds and exclusions | ✓ | ✓ |
+| Bulk cleanup across many files |  | ✓ |
+| Saved scan profiles |  | ✓ |
+| Custom rules |  | ✓ |
+| Severity tuning |  | ✓ |
+| Markdown report export |  | ✓ |
 
-No subscription, no account. [Unlock Pro →](https://buymeacoffee.com/attachmentmanager)
+## Install
 
-<!-- TODO: screenshot — bulk actions + the trash confirm dialog -->
+**Community plugins**
 
-## Is it safe? (Yes — here's how)
+After community review approval, search for **Attachment Audit** in Community plugins and install it there.
 
-Attachment Manager touches your files, so it's built to never lose data:
+**Manual install**
 
-- **Nothing is hard-deleted.** Trash respects your Obsidian "Deleted files" setting (system trash or `.trash/`), so anything is recoverable — and the confirm dialog tells you exactly where files will go.
-- **"Unused" requires two independent signals** to agree before a file can be flagged — the check is biased toward *not* flagging.
-- **Duplicate cleanup only trashes unused copies** and always keeps at least one copy; a referenced copy is never touched.
-- **Moves and renames use Obsidian's link-updating rename**, so Markdown links, wikilinks, embeds, and canvas references are kept intact. (Raw HTML `<img src>` and frontmatter plain-string paths are not rewritten by Obsidian — a documented limitation.)
-- Every destructive action re-validates the file immediately before acting and asks for confirmation.
-
-## "A free plugin already finds orphans — why $9?"
-
-Because "finds orphans" and "safe to bulk-delete hundreds of files" are very different things. Free orphan-finders check resolved links only, so they miss canvas / frontmatter / HTML references and can flag a file that's still in use. Attachment Manager's two-signal check is built to never do that — and it puts unused detection, duplicates, oversized files, junk-name cleanup, recoverable trashing, and link-safe moves in one place. The free tier is genuinely useful on its own; $9 (one-time, no subscription, no account) unlocks doing it all in bulk with a single click.
-
-- **One-time payment**, not a subscription
-- **Offline license** — buy once, no account, works forever
-- **Runs 100% locally** — your files never leave your machine
+Copy `main.js`, `manifest.json`, and `styles.css` into `.obsidian/plugins/attachment-audit/` in your vault, then enable the plugin.
 
 ## Getting started
 
-1. Open the ribbon **paperclip** icon (or run **Attachment Manager: Run attachment scan**).
-2. Optionally set an **attachment folder** in settings to enable the "misplaced" check and one-click moves.
-3. Run a scan, review the results, and reclaim your space.
+1. Run **Attachment Audit: Run attachment scan** from the command palette.
+2. Optionally set an attachment folder to enable misplaced-file checks and one-click moves.
+3. Review the reclaimable-space summary and work through the flagged files.
 
-## License key
+## Safety
 
-Pro is unlocked with an offline license key (Ed25519-signed, verified locally — no server, no login). After purchase, paste the key into **Settings → Community plugins → Attachment Manager → Pro license → License key** and click Validate.
+Attachment Audit touches files, so safety is the whole business model:
+
+- trash respects your Obsidian deleted-files setting
+- "unused" requires two signals to agree
+- duplicate cleanup keeps at least one copy and avoids referenced files
+- moves and renames use Obsidian's link-updating rename flow
+- every destructive action confirms and re-checks before acting
+
+## Pro
+
+Attachment Audit Pro uses an offline license key.
+
+- one-time purchase model
+- no account required
+- no always-online checks
+- validated locally in your vault
+
+Pro is for people who want to reclaim space in batches instead of babysitting one file at a time.
 
 ## Privacy
 
-Everything runs locally in your vault. No network calls, no telemetry, no account.
+Everything runs locally in your vault.
 
-## Ready to reclaim space in bulk?
+- no network calls
+- no telemetry
+- no account
+- offline license validation
 
-[**Unlock Attachment Manager Pro — $9 one-time →**](https://buymeacoffee.com/attachmentmanager)
+## Pricing
 
-One payment — this version is yours forever. Offline license, no account.
+- **Free** — full audit plus one-file-at-a-time cleanup
+- **Pro — $9 one-time** — bulk cleanup, saved profiles, custom rules, severity tuning, and Markdown report export
+
+## FAQ
+
+**Why not just use a free orphan finder?**
+Because "lists possible orphans" and "safe enough to bulk-delete" are not the same thing.
+
+**Does Pro require an account?**
+No. Pro uses a one-time offline license key.
+
+**Does Attachment Audit upload my files anywhere?**
+No. It runs locally in your vault.
+
+## Support
+
+Open an issue at [github.com/israerusan/attachment-audit](https://github.com/israerusan/attachment-audit/issues).

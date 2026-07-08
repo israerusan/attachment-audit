@@ -91,11 +91,15 @@ export class MentionMatcher {
  * percent-encodes the name still suppresses an "unused" flag.
  */
 export function fileNameVariants(fileName: string): string[] {
-  const raw = fileName.toLowerCase();
+  // Normalize to NFC so an NFD-composed reference (common on macOS, e.g. "café"
+  // as e + combining accent) matches an NFC filename — a missed match here could
+  // let a still-referenced file be flagged unused and trashed.
+  const normalized = fileName.normalize("NFC");
+  const raw = normalized.toLowerCase();
   const variants = [raw];
   let encoded: string;
   try {
-    encoded = encodeURIComponent(fileName).toLowerCase();
+    encoded = encodeURIComponent(normalized).toLowerCase();
   } catch {
     encoded = raw;
   }

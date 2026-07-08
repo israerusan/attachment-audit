@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Attachment Manager are documented here. This project adheres to [Keep a Changelog](https://keepachangelog.com/) and [Semantic Versioning](https://semver.org/).
+All notable changes to Attachment Audit are documented here. This project adheres to [Keep a Changelog](https://keepachangelog.com/) and [Semantic Versioning](https://semver.org/).
 
 ## [1.0.0] - 2026-07-06
 

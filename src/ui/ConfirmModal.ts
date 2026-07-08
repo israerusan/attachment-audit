@@ -20,7 +20,7 @@ export class ConfirmModal extends Modal {
   onOpen(): void {
     const { contentEl } = this;
     this.titleEl.setText(this.opts.title);
-    contentEl.createDiv({ cls: "attachment-manager-confirm-body", text: this.opts.body });
+    contentEl.createDiv({ cls: "attachment-audit-confirm-body", text: this.opts.body });
 
     new Setting(contentEl)
       .addButton((b) => {
