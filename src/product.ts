@@ -11,7 +11,7 @@ export const PRODUCT_NAME = "Attachment Audit";
 export const PRO_NAME = "Attachment Audit Pro";
 
 /** Where "Unlock Pro" sends people. Confirm the real handle before release. */
-export const PURCHASE_URL = "https://github.com/israerusan/attachment-audit#buy-pro";
+export const PURCHASE_URL = "https://buymeacoffee.com/vaultspotlight/e/560207";
 
 /** Where a happy user can leave a star/review (helps discovery). */
 export const REVIEW_URL = "https://github.com/israerusan/attachment-audit";

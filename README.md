@@ -102,6 +102,8 @@ Pro is for people who want to reclaim space in batches instead of babysitting on
 
 Attachment Audit Pro uses an offline license key and a one-time payment.
 
+**Buy Attachment Audit Pro — $9 one-time:** https://buymeacoffee.com/vaultspotlight/e/560207
+
 What you get:
 - bulk cleanup across many files
 - saved scan profiles
