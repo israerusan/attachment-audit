@@ -4,6 +4,11 @@
 
 Attachment Audit scans your vault for truly unused attachments, duplicates, oversized files, junk-named pastes, and misplaced files — then shows exactly what is reclaimable before you touch anything.
 
+<!-- SCREENSHOT SLOT — drop a real Obsidian capture here to lift conversions.
+     ![Attachment Audit dashboard: reclaimable-space total with files grouped by detector](docs/assets/hero.png)
+     Suggested shot: the dashboard showing the reclaimable-space total and a few flagged files (unused / duplicate / large). Save as docs/assets/hero.png -->
+
+
 Free lets you scan and clean one file at a time. Pro unlocks bulk cleanup, saved scan profiles, custom rules, severity tuning, and Markdown reports.
 
 > Built for the moment when "I think these files are junk" is not good enough and you want evidence before you start deleting.
@@ -61,6 +66,14 @@ Free proves value. Pro is for doing cleanup at scale.
 | Severity tuning |  | ✓ |
 | Markdown report export |  | ✓ |
 
+Purchase: [Buy Me a Coffee — Attachment Audit Pro](https://buymeacoffee.com/vaultspotlight/e/560207). License keys are verified **offline** (Ed25519) — no account, server, or subscription.
+
+**Activate Pro**
+
+1. Purchase via [Buy Me a Coffee — Attachment Audit Pro](https://buymeacoffee.com/vaultspotlight/e/560207).
+2. Your license key is emailed to you **automatically, within seconds** — delivery is fully automated, no waiting.
+3. Paste it into the plugin's settings — Pro unlocks instantly, verified offline.
+
 ## Install
 
 **Community plugins**
@@ -111,13 +124,11 @@ What you get:
 - severity tuning
 - Markdown report export
 
-Current delivery model:
+Delivery model:
 - one-time purchase
 - no account required
 - offline license verification
-- license key delivered manually by the author after purchase
-
-Current sales are fulfilled manually by the author and delivered as offline license keys. Replace this with instant checkout before you try to scale paid distribution.
+- license key delivered automatically by email, in seconds
 
 ## Privacy
 
