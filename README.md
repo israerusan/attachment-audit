@@ -78,7 +78,7 @@ Purchase: [Buy Me a Coffee — Attachment Audit Pro](https://buymeacoffee.com/va
 
 **Community plugins**
 
-After community review approval, search for **Attachment Audit** in Community plugins and install it there.
+Open **Settings → Community plugins**, search **Attachment Audit**, and install it — one click, auto-updates.
 
 **Manual install**
 
