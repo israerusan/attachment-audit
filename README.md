@@ -46,7 +46,7 @@ That means a file referenced only in canvas, frontmatter, or raw HTML is far les
 It also keeps cleanup sane:
 - nothing is hard-deleted
 - moves and renames preserve links
-- duplicate cleanup never trashes every copy
+- duplicate cleanup only removes copies nothing links to, and never trashes every copy
 - destructive actions re-validate before acting
 
 ## Free vs Pro
@@ -96,9 +96,33 @@ Attachment Audit touches files, so safety is the whole business model:
 
 - trash respects your Obsidian deleted-files setting
 - "unused" requires two signals to agree
-- duplicate cleanup keeps at least one copy and avoids referenced files
+- duplicate cleanup keeps at least one copy and never touches a referenced file — see [How duplicate cleanup decides](#how-duplicate-cleanup-decides)
 - moves and renames use Obsidian's link-updating rename flow
 - every destructive action confirms and re-checks before acting
+
+## How duplicate cleanup decides
+
+**"Trash duplicate copies" is not a merge action.** It never rewrites a link, because it never trashes a file that anything links to. That is the whole design: declining to delete a file is safe, silently repointing links is not.
+
+A duplicate copy is trashed only if **all** of these hold:
+
+1. **It is selected.** Unselected copies are never touched.
+2. **The same scan flagged it Unused** — the two-signal check: no note resolves a link to it, *and* its filename appears nowhere in any note body, frontmatter field, canvas, or other text source. Both signals have to agree.
+3. **It still has zero inbound references at the moment you click.** Re-checked live, per file, immediately before trashing.
+
+So for a set of byte-identical copies:
+
+| Your cluster | What happens |
+| --- | --- |
+| One copy linked, the rest orphaned | The orphans are trashed. The linked copy survives — it was never eligible. |
+| Every copy is orphaned | One copy is kept and the rest are trashed. You never lose the content. |
+| Two or more copies are linked | **Nothing is trashed.** You get a notice: "no safely-removable duplicate copies (all are referenced or would be the last copy)." |
+
+There is no "smart" choice of which copy is better. Linked copies survive because they are ineligible, not because they were preferred. In the all-orphaned case the survivor is simply the first in the current list order — so **if you care which specific file survives, deselect it before running the action.**
+
+**To actually merge two linked duplicates:** search your vault for the filename of the copy you want to lose, repoint those links at the copy you want to keep, then rescan. The loser is now Unused and can be trashed normally. Automatic cross-duplicate repointing is not implemented, and will not ship until it can't corrupt a vault.
+
+Related: **Move** and **Rename** *do* update links — Markdown links, wikilinks, and canvas references, via Obsidian's own link-updating rename. They do not rewrite raw HTML `<img src="...">` or path strings stored in frontmatter. Duplicate cleanup needs none of this, since it only ever removes files nothing points at.
 
 ## Pro
 
@@ -148,6 +172,9 @@ Everything runs locally in your vault.
 
 **Why not just use a free orphan finder?**
 Because "lists possible orphans" and "safe enough to bulk-delete" are not the same thing.
+
+**If I trash a duplicate, will links to it break?**
+No. "Trash duplicate copies" only removes copies that nothing links to, so there is nothing to break and nothing to repoint. If two duplicates are both linked, neither is trashed. See [How duplicate cleanup decides](#how-duplicate-cleanup-decides).
 
 **Does Pro require an account?**
 No. Pro uses a one-time offline license key.

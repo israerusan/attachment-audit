@@ -499,8 +499,9 @@ export class AttachmentManagerView extends ItemView {
       }
       this.plugin.confirmDestructive(
         "Trash duplicate copies",
-        `Trash redundant unused copies among ${dups.length} selected duplicate(s)? ` +
-          "At least one copy of each file is always kept, and any referenced copy is never touched. " +
+        `Of the ${dups.length} selected duplicate(s), trash only the copies nothing links to? ` +
+          "Linked copies are never touched and links are never rewritten — this is not a merge. " +
+          "At least one copy of each file is always kept. " +
           this.plugin.trashDestinationNote(),
         "Trash copies",
         () => void this.plugin.bulkTrashDuplicateCopies(dups).then((c) => this.afterBulkMutate(c))
