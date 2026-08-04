@@ -246,6 +246,22 @@ function firstAtomCharset(alt: string): Set<number> | null {
     const body = alt.slice(1, close);
     if (body.startsWith("^")) return null; // negated classes: don't guess
     if (body.length === 0) return null; // `[]` matches nothing — not worth modelling
+
+    // A RANGE whose endpoint is an escape is never modelled. That combination is
+    // where this parser kept going wrong, and always in the unsafe direction — it
+    // UNDER-approximates the charset, so branches that really overlap are proved
+    // disjoint and an exponential pattern is accepted:
+    //
+    //   [\.-o]  read as {'.', '-', 'o'}   instead of the range 0x2E-0x6F
+    //   [a-\d]  read as {'d'}             instead of 'a' plus every digit
+    //
+    // `^(?:0|[\.-o])+$` was accepted on that basis and takes 495 ms at 26
+    // characters; the wider `^(?:[\!-~]|Q)+$` takes 64 SECONDS at 30. A sweep of
+    // 83,202 accepted patterns found 135 provably-overlapping ones, and every
+    // single one had an escaped range endpoint.
+    //
+    // An escaped hyphen (`[\-]`) is a LITERAL, not a range operator, so it stays
+    // modellable — the check below is for a `-` in range position specifically.
     const set = new Set<number>();
     for (let i = 0; i < body.length; i++) {
       if (body[i] === "\\") {
@@ -263,11 +279,16 @@ function firstAtomCharset(alt: string): Set<number> | null {
         // wrong code point and cleared genuinely overlapping alternations:
         // `^(?:[\x41]|A)+$` was accepted while the engine sees `(A|A)+`.
         if (/[a-zA-Z0-9]/.test(next)) return null;
+        // An escaped literal used as the LOW endpoint of a range: `[\.-o]`.
+        if (body[i + 2] === "-" && body[i + 3] !== undefined) return null;
         set.add(body.charCodeAt(i + 1)); // escaped punctuation is its own literal
         i++;
         continue;
       }
       if (body[i + 1] === "-" && body[i + 2] !== undefined && body[i + 2] !== "]") {
+        // An escape as the HIGH endpoint: `[a-\d]`. `charCodeAt` would read the
+        // backslash (92) and silently produce an empty or wrong range.
+        if (body[i + 2] === "\\") return null;
         for (let v = body.charCodeAt(i); v <= body.charCodeAt(i + 2); v++) set.add(v);
         i += 2;
         continue;

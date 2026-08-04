@@ -269,3 +269,25 @@ assert.ok(safe("^(\\w|-)+$"), "\w is exactly [A-Za-z0-9_]");
 assert.ok(safe("^(\\d|-)+$"), "\d is exactly [0-9]");
 
 console.log("regexSafety class-parsing + shorthand tests passed");
+
+// --- A range endpoint that is an ESCAPE cannot be modelled -----------------
+// The parser under-approximated the charset, which breaks the disjointness
+// proof in the UNSAFE direction: `[\\.-o]` read as {'.','-','o'} instead of the
+// range 0x2E-0x6F, and `[a-\\d]` read as {'d'} instead of 'a' plus every digit.
+// `^(?:0|[\\.-o])+$` was accepted on that basis: 495 ms at 26 chars, and the
+// wider `^(?:[\\!-~]|Q)+$` takes 64 SECONDS at 30.
+assert.ok(!safe("^(?:0|[\\.-o])+$"), "escaped LOW endpoint");
+assert.ok(!safe("^(?:[\\!-~]|Q)+$"));
+assert.ok(!safe("^(?:a|[a-\\d])+$"), "escaped HIGH endpoint");
+assert.ok(!safe("^(?:[+-\\-]|,)+$"));
+
+// An escaped hyphen is a LITERAL, not a range operator, so it stays modellable.
+assert.ok(safe("^([\\-]|a)+$"));
+assert.ok(safe("^([\\.]|a)+$"));
+assert.ok(safe("^([\\]]|a)+$"));
+assert.ok(safe("^([\\w]|-)+$"));
+// Plain ranges with literal endpoints are still modelled exactly.
+assert.ok(safe("^([a-z]|[0-9])+$"));
+assert.ok(safe("^([a-m]|[n-z])+$"));
+
+console.log("regexSafety escaped-range tests passed");
