@@ -51,8 +51,17 @@ const UNBOUNDED_CHOICES = 64;
  * `^a{0,50}` x5 took 8 seconds at the 256-character cap. Multiplying the ranges
  * catches those (50^6 = 1.5e10) while leaving exact counts alone: `{4}` offers
  * exactly one choice and cannot backtrack, so `^(\d{4})-(\d{2})$` is free.
+ *
+ * The limit is CALIBRATED, not guessed. Measured worst case against a 255-char
+ * basename, which is the cap `matchesJunkName` applies:
+ *
+ *      32,768 ->   9 ms      262,144 ->  49 ms
+ *     147,456 ->  43 ms      786,432 -> 156 ms
+ *
+ * 64^3 keeps three open-ended repeats (`^\w+\w+\w+$`, `a+a+a+`) usable while
+ * refusing the four-quantifier chains that cross 150 ms per attachment.
  */
-const MAX_SEARCH_SPACE = 1_000_000;
+const MAX_SEARCH_SPACE = UNBOUNDED_CHOICES ** 3; // 262,144 — three open-ended repeats
 
 interface GroupFrame {
   /** Index of the `(` that opened this group. */
@@ -63,58 +72,68 @@ interface GroupFrame {
   altBreaks: number[];
 }
 
-/**
- * The maximum number of repetitions a quantifier allows, or `Infinity`. A
- * quantifier that can repeat at most once (`?`, `{0,1}`, `{1}`) cannot multiply.
- */
-function maxRepeatsAt(pattern: string, i: number): number {
+/** The repetition range a quantifier permits, or null when `i` is not a quantifier. */
+interface RepeatRange {
+  min: number;
+  max: number;
+}
+
+function quantifierRangeAt(pattern: string, i: number): RepeatRange | null {
   const c = pattern[i];
-  if (c === "*" || c === "+") return Infinity;
-  if (c === "?") return 1;
-  if (c !== "{") return 0; // not a quantifier at all
+  if (c === "*") return { min: 0, max: Infinity };
+  if (c === "+") return { min: 1, max: Infinity };
+  if (c === "?") return { min: 0, max: 1 };
+  if (c !== "{") return null;
   const close = pattern.indexOf("}", i);
-  if (close === -1) return 0;
-  const body = pattern.slice(i + 1, close);
-  const bounded = /^(\d+)(?:,(\d*))?$/.exec(body);
-  if (!bounded) return 0;
-  if (bounded[2] === undefined) return Number(bounded[1]); // {n}
-  if (bounded[2] === "") return Infinity; // {n,}
-  return Number(bounded[2]); // {n,m}
+  if (close === -1) return null;
+  const bounded = /^(\d+)(?:,(\d*))?$/.exec(pattern.slice(i + 1, close));
+  if (!bounded) return null; // a literal `{`, per JS
+  const min = Number(bounded[1]);
+  if (bounded[2] === undefined) return { min, max: min }; // {n}
+  if (bounded[2] === "") return { min, max: Infinity }; // {n,}
+  return { min, max: Number(bounded[2]) }; // {n,m}
 }
 
 /**
  * How many different lengths the quantifier at `i` can consume — its branching
- * factor. `{4}` is 1 (no choice, so no backtracking), `?` is 2, `{1,50}` is 50,
- * and anything open-ended is treated as {@link UNBOUNDED_CHOICES}. Returns 1 when
- * there is no quantifier here, so it is multiplication-neutral.
+ * factor. Returns 1 when there is no quantifier, so it is multiplication-neutral.
  */
 function quantifierChoicesAt(pattern: string, i: number): number {
-  const c = pattern[i];
-  if (c === "*" || c === "+") return UNBOUNDED_CHOICES;
-  if (c === "?") return 2;
-  if (c !== "{") return 1;
-  const close = pattern.indexOf("}", i);
-  if (close === -1) return 1;
-  const bounded = /^(\d+)(?:,(\d*))?$/.exec(pattern.slice(i + 1, close));
-  if (!bounded) return 1;
-  if (bounded[2] === undefined) return 1; // {n} — exactly n, no choice
-  if (bounded[2] === "") return UNBOUNDED_CHOICES; // {n,}
-  return Math.max(1, Number(bounded[2]) - Number(bounded[1]) + 1); // {n,m}
+  const range = quantifierRangeAt(pattern, i);
+  if (range === null) return 1;
+  if (range.max === Infinity) return UNBOUNDED_CHOICES;
+  return Math.max(1, range.max - range.min + 1);
 }
 
 /**
- * True when the quantifier at `i` can repeat more than once — the property that
- * makes nesting multiply.
+ * True when the quantifier at `i` makes the text it governs VARIABLE in length.
+ * Used to decide whether a group's BODY is ambiguous.
  *
- * BOUNDED repetition counts. An earlier version tested only for unbounded
- * quantifiers, so `^(x{1,20}){1,20}$` sailed through: measured at **106 seconds**
- * for a single `test()` against an 80-character input, and `^(\w{1,9}){1,9}$`
- * took 12 seconds PER ATTACHMENT through the real junk-name path. Nested bounded
- * repeats multiply (20x20 = 400 ways to split each prefix) exactly as nested
- * unbounded ones do.
+ * The test is `max > min`, not `max > 1`:
+ *  - `?` and `{0,1}` have max 1, so they read as non-repeating — but an optional
+ *    atom inside a repeated group is the classic length ambiguity: `(aa?)+` can
+ *    split a run of `a`s into any mix of ones and twos. Measured **14,275 ms**
+ *    for `^(aa?)+$` on a 41-character input, and `^(\w\w?)+$` — something a user
+ *    might genuinely write for "one or two word characters" — is the same shape.
+ *  - `{4}` has max 4, so it read as repeating and made `^(\d{4})+$` look
+ *    dangerous. A fixed-width body offers no choice and cannot backtrack.
  */
-function repeatingQuantifierAt(pattern: string, i: number): boolean {
-  return maxRepeatsAt(pattern, i) > 1;
+function variableLengthQuantifierAt(pattern: string, i: number): boolean {
+  const range = quantifierRangeAt(pattern, i);
+  return range !== null && range.max > range.min;
+}
+
+/**
+ * True when the quantifier at `i` can run its subject MORE THAN ONCE. Used for
+ * the OUTER quantifier on a group — a distinct question from the one above.
+ *
+ * `(X)?` runs X at most once, so no amount of ambiguity inside X can multiply:
+ * that is why `^image( \(\d+\))?$`, one of the shipped defaults, is safe despite
+ * containing `\d+` inside an optional group.
+ */
+function repeatsMoreThanOnceAt(pattern: string, i: number): boolean {
+  const range = quantifierRangeAt(pattern, i);
+  return range !== null && range.max > 1;
 }
 
 /** ASCII code points matched by a shorthand class, used for disjointness tests. */
@@ -310,7 +329,7 @@ export function checkRegexSafety(pattern: string): RegexSafetyVerdict {
         frame.hasQuantifier || alternativesAmbiguous(body, frame.altBreaks, frame.start);
       // A repeated group whose body is itself ambiguous is the classic
       // exponential shape: (a+)+, (\w+\s?)+, (a|aa)*, (x{1,20}){1,20}.
-      if (ambiguous && repeatingQuantifierAt(pattern, i + 1)) {
+      if (ambiguous && repeatsMoreThanOnceAt(pattern, i + 1)) {
         return {
           safe: false,
           reason:
@@ -343,7 +362,7 @@ export function checkRegexSafety(pattern: string): RegexSafetyVerdict {
     }
     // Mark the enclosing group ambiguous for ANY repeating quantifier, bounded or
     // not — `(x{1,20})` is just as multiplicative as `(x+)` once repeated.
-    if (stack.length > 0 && repeatingQuantifierAt(pattern, i)) {
+    if (stack.length > 0 && variableLengthQuantifierAt(pattern, i)) {
       stack[stack.length - 1].hasQuantifier = true;
     }
   }

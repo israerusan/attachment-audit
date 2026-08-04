@@ -149,3 +149,36 @@ console.log("regexSafety case-fold + bounded-chain tests passed");
 const BACKSLASH = String.fromCharCode(92);
 assert.ok("\\w{1,60}".includes(BACKSLASH), "regex escapes in this file survived editing");
 assert.ok("^(\\d{4})-(\\d{2})$".includes(BACKSLASH + "d"), "digit escapes survived editing");
+
+// --- An OPTIONAL atom inside a repeated group -------------------------------
+// `?` has max 1, so an earlier ambiguity test ("can it repeat more than once?")
+// treated it as harmless. But an optional atom inside a repeated group is the
+// classic length ambiguity: `(aa?)+` splits a run of `a`s into any mix of ones
+// and twos. Measured **14,275 ms** for `^(aa?)+$` on a 41-character input.
+// The shorthand-class forms are ones a user could plausibly type.
+for (const p of [
+  "^(aa?)+$", "^(a?a)+$", "^(aa?)*$", "^(aa?){1,99}$", "^(a{0,1}a)+$",
+  "^(?:aa?)+$", "^((a)a?)+$", "^(a(a)?)+$", "^x(aa?)+$",
+  "^(\w\w?)+$", "^([a-z][a-z]?)+$", "^(\d\d?)+$",
+  "^(a\w?)+$", "^(.a?)+$",
+]) {
+  assert.ok(!safe(p), `optional-in-repeated-group must be refused: ${p}`);
+}
+
+// ...but a group that runs AT MOST ONCE cannot multiply, however ambiguous its
+// body. This is why a shipped default with `\d+` inside an optional group is fine.
+assert.ok(safe("^image( \(\d+\))?$"));
+assert.ok(safe("^(\d+)?$"));
+assert.ok(safe("^(a+)?$"));
+// A FIXED-width body offers no choice, so repeating it is safe.
+assert.ok(safe("^(\d{4})+$"), "fixed-width group repeat cannot backtrack");
+assert.ok(safe("^(ab){2,8}$"));
+
+// --- The search-space budget is calibrated, not guessed ---------------------
+// Measured worst case against a 255-char basename (the matchesJunkName cap):
+//   32,768 -> 9ms   147,456 -> 43ms   262,144 -> 49ms   786,432 -> 156ms
+assert.ok(safe("^\w+\w+\w+$"), "three open-ended repeats stay usable (49ms worst case)");
+assert.ok(!safe("^\w+\w+\w+\w{1,3}$"), "four crosses 150ms per attachment");
+assert.ok(!safe("^\w+\w{1,25}\w{1,25}\w{1,25}$"));
+
+console.log("regexSafety optional-in-group + budget tests passed");
