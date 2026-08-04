@@ -4,6 +4,8 @@ import type { IssueType, CustomRule, ScanProfile } from "./types";
 import { ISSUE_TYPES, ISSUE_TYPE_LABELS } from "./types";
 import { DEFAULT_JUNK_NAME_PATTERNS } from "./core/naming/namePatterns";
 import { checkRegexSafety } from "./core/rules/regexSafety";
+import { DEFAULT_JOURNAL_LIMIT, MAX_JOURNAL_LIMIT } from "./core/journal/actionJournal";
+import { openHistory } from "./ui/HistoryModal";
 import { LicenseManager } from "./core/license/LicenseManager";
 import { PRO_NAME, PRO_TAGLINE, PURCHASE_URL, REVIEW_URL } from "./product";
 import { RuleEditModal } from "./ui/RuleEditModal";
@@ -177,6 +179,35 @@ export class AttachmentManagerSettingTab extends PluginSettingTab {
     // look like the detector was broken.
     this.patternWarningEl = containerEl.createDiv({ cls: "attachment-audit-nudge" });
     this.reportUnsafePatterns(s.junkNamePatterns);
+
+    new Setting(containerEl)
+      .setName("Cleanup history entries")
+      .setDesc(
+        "How many past actions to remember, so you can see what changed and put it back. " +
+          "Set 0 to record nothing. Only files sent to the vault's .trash folder can be restored — " +
+          "the system trash is not reachable from a plugin."
+      )
+      .addText((t) =>
+        t
+          .setPlaceholder(String(DEFAULT_JOURNAL_LIMIT))
+          .setValue(String(s.journalLimit))
+          .onChange(async (v) => {
+            const n = Number.parseInt(v, 10);
+            s.journalLimit = Number.isFinite(n)
+              ? Math.min(MAX_JOURNAL_LIMIT, Math.max(0, n))
+              : DEFAULT_JOURNAL_LIMIT;
+            // Trim immediately, so lowering the cap takes effect without waiting
+            // for the next action to push entries off the end.
+            s.journal = s.journal.slice(0, s.journalLimit);
+            await this.save();
+          })
+      )
+      .addExtraButton((b) =>
+        b
+          .setIcon("history")
+          .setTooltip("Open cleanup history")
+          .onClick(() => openHistory(this.plugin))
+      );
 
     new Setting(containerEl)
       .setName("Show image previews")

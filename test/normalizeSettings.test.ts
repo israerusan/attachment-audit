@@ -253,3 +253,52 @@ assert.strictEqual(
 }
 
 console.log("normalizeSettings summary/clamp tests passed");
+
+// --- Journal (schema v3) -----------------------------------------------------
+// The journal drives a RESTORE button, so a malformed batch is worse than a
+// missing one: it would offer an undo that fails halfway through.
+assert.deepStrictEqual(load({ journal: "nope" }).journal, []);
+assert.deepStrictEqual(load({ journal: [null, 5, {}] }).journal, []);
+assert.deepStrictEqual(load({}).journal, [], "a vault upgrading from 1.1.0 starts with no history");
+
+// The limit is clamped, and 0 means "record nothing".
+assert.strictEqual(load({ journalLimit: -5 }).journalLimit, 0);
+assert.strictEqual(load({ journalLimit: "lots" }).journalLimit, DEFAULT_SETTINGS.journalLimit);
+assert.strictEqual(load({ journalLimit: 0 }).journalLimit, 0);
+assert.ok(load({ journalLimit: 99999 }).journalLimit <= 500);
+
+// Lowering the limit trims on load, so it takes effect immediately.
+{
+  const many = Array.from({ length: 20 }, (_, i) => ({
+    id: `b${i}`,
+    at: "2026-08-04T10:00:00.000Z",
+    op: "trash",
+    trashDestination: "local",
+    entries: [{ from: `f${i}.png`, sizeBytes: 1 }],
+  }));
+  assert.strictEqual(load({ journal: many, journalLimit: 5 }).journal.length, 5);
+  assert.strictEqual(load({ journal: many, journalLimit: 0 }).journal.length, 0);
+}
+
+// A trash batch with no recorded destination must load as "unknown", which is
+// NOT restorable — we never offer an undo we cannot prove will work.
+{
+  const [only] = load({
+    journal: [{ id: "a", at: "2026-08-04T10:00:00.000Z", op: "trash", entries: [{ from: "x.png" }] }],
+  }).journal;
+  assert.strictEqual(only.trashDestination, "unknown");
+}
+
+// The 2 -> 3 migration seeds the new fields on a blob that predates them.
+{
+  const { raw, fromVersion } = migrateRawSettings({ version: 2, attachmentFolder: "assets" });
+  assert.strictEqual(fromVersion, 2);
+  assert.strictEqual(raw.version, SCHEMA_VERSION);
+  assert.deepStrictEqual(raw.journal, []);
+  assert.strictEqual(typeof raw.journalLimit, "number");
+  assert.strictEqual(raw.attachmentFolder, "assets", "existing settings survive the migration");
+}
+// ...and a pre-versioned blob walks the whole chain to the current version.
+assert.strictEqual(migrateRawSettings({}).raw.version, SCHEMA_VERSION);
+
+console.log("normalizeSettings journal tests passed");

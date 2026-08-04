@@ -1001,3 +1001,128 @@ button.attachment-audit-tile:hover {
   line-height: var(--line-height-normal);
   color: var(--text-normal);
 }
+
+/* Cleanup history — the evidence behind the safety claim.
+   Every trash, move and rename this plugin performed, with an honest statement
+   of whether it can be put back. */
+
+.attachment-audit-history-modal {
+  max-width: 40em;
+}
+
+.attachment-audit-history-intro {
+  color: var(--text-muted);
+  margin-bottom: var(--size-4-3);
+}
+
+.attachment-audit-history {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2);
+  max-height: 26em;
+  overflow-y: auto;
+}
+
+.attachment-audit-history-item {
+  padding: var(--size-4-2);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+}
+
+/* A reverted batch stays visible — the history is a record, not a to-do list —
+   but recedes so the actionable ones lead. */
+.attachment-audit-history-item.is-reverted {
+  opacity: 0.6;
+}
+
+.attachment-audit-history-head {
+  display: flex;
+  align-items: center;
+  gap: var(--size-2-2);
+  margin-bottom: var(--size-2-2);
+}
+
+.attachment-audit-history-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.attachment-audit-history-title {
+  font-weight: var(--font-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-audit-history-when {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.attachment-audit-history-files {
+  max-height: 9em;
+  overflow-y: auto;
+  padding: var(--size-2-2) var(--size-4-2);
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.attachment-audit-history-file {
+  overflow-wrap: anywhere;
+}
+
+.attachment-audit-history-arrow {
+  color: var(--text-faint);
+}
+
+.attachment-audit-history-more {
+  margin-top: var(--size-2-2);
+  font-style: italic;
+}
+
+.attachment-audit-history-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  margin-top: var(--size-4-2);
+}
+
+/* Why something CANNOT be restored is as important as offering the restore —
+   never promise an undo the filesystem cannot deliver. */
+.attachment-audit-history-note {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.attachment-audit-history-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--size-4-3);
+}
+
+/* Standing entry point from the dashboard. */
+.attachment-audit-history-link {
+  margin-top: var(--size-4-3);
+}
+
+.attachment-audit-history-link .attachment-audit-inline-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--size-2-2);
+  text-decoration: none;
+}
+
+.attachment-audit-history-link .attachment-audit-inline-link:hover {
+  text-decoration: underline;
+}
+
+.attachment-audit-history-link-icon {
+  display: inline-flex;
+}

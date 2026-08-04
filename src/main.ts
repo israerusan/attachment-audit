@@ -17,10 +17,20 @@ import type {
   CustomRule,
   ScanProfile,
   SortMode,
+  TrashDestination,
 } from "./types";
+
+/** Obsidian's local trash, relative to the vault root. */
+const TRASH_DIR = ".trash";
+
+/** Escape a string for literal use inside a RegExp. */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, String.fromCharCode(92) + "$&");
+}
 import { DEFAULT_SETTINGS, AttachmentManagerSettingTab } from "./settings";
 import { AttachmentManagerView, VIEW_TYPE_ATTACHMENT_MANAGER } from "./ui/DashboardView";
 import { ReviewQueueModal } from "./ui/ReviewQueueModal";
+import { openHistory } from "./ui/HistoryModal";
 import { ConfirmModal } from "./ui/ConfirmModal";
 import {
   scanVault,
@@ -35,7 +45,15 @@ import { countByType } from "./core/rules/severity";
 import { computeReclaim } from "./core/reclaim/reclaimableSpace";
 import { selectDuplicateCopiesToTrash } from "./core/dedupe/duplicateTrashSelection";
 import { buildMarkdownReport } from "./core/reports/markdownReport";
-import { issueKey, issueKeyPath, issueKeyType } from "./core/utils/ids";
+import { issueKey, issueKeyPath, issueKeyType, newId } from "./core/utils/ids";
+import {
+  appendBatch,
+  replaceBatch,
+  restorability,
+  type CleanupOp,
+  type JournalBatch,
+  type JournalEntry,
+} from "./core/journal/actionJournal";
 import { formatBytes } from "./core/utils/sizes";
 import { moveTargetPath, uniquePath, dirName, splitExtension, joinPath } from "./core/paths/pathRewrite";
 import { sanitizeBaseName } from "./core/naming/sanitizeName";
@@ -137,6 +155,11 @@ export default class AttachmentManagerPlugin extends Plugin {
       id: "export-scan-report",
       name: "Export scan report",
       callback: () => this.exportReportCommand(),
+    });
+    this.addCommand({
+      id: "open-cleanup-history",
+      name: "Open cleanup history",
+      callback: () => openHistory(this),
     });
 
     // Source-change tracking for the incremental live safety re-check. These
@@ -828,6 +851,14 @@ export default class AttachmentManagerPlugin extends Plugin {
       }
     }
     const reclaimed = trashed.reduce((s, p) => s + (bytesByPath.get(p) ?? 0), 0);
+    // Capture the destination NOW: the user can change their "Deleted files"
+    // setting later, and where these files actually went is what decides whether
+    // they can be put back.
+    await this.recordBatch(
+      "trash",
+      trashed.map((p) => ({ from: p, sizeBytes: bytesByPath.get(p) ?? 0 })),
+      this.trashDestination()
+    );
     this.reportBulk("Trashed", trashed.length, skipped, failed, reclaimed);
     await this.recordTrashOutcome(trashed.length, reclaimed, single);
     return trashed;
@@ -887,6 +918,11 @@ export default class AttachmentManagerPlugin extends Plugin {
       }
     }
     const reclaimed = trashed.reduce((s, p) => s + (bytesByPath.get(p) ?? 0), 0);
+    await this.recordBatch(
+      "trash",
+      trashed.map((p) => ({ from: p, sizeBytes: bytesByPath.get(p) ?? 0 })),
+      this.trashDestination()
+    );
     this.reportBulk("Trashed", trashed.length, skipped, failed, reclaimed);
     await this.recordTrashOutcome(trashed.length, reclaimed, false);
     return trashed;
@@ -918,6 +954,9 @@ export default class AttachmentManagerPlugin extends Plugin {
       }
     }
     const moved: string[] = [];
+    // Both endpoints, so the move can be reversed. `moved` alone only carries the
+    // destination, which is not enough to put anything back.
+    const journalEntries: JournalEntry[] = [];
     const inSubfolder: string[] = [];
     let skipped = 0;
     let failed = 0;
@@ -940,13 +979,16 @@ export default class AttachmentManagerPlugin extends Plugin {
       const target = uniquePath(desired, (p) => this.pathExistsCI(p, path));
       if (this.pathExistsCI(target, path)) { skipped++; continue; }
       try {
+        const sizeBytes = file.stat.size;
         await this.app.fileManager.renameFile(file, target);
         moved.push(target);
+        journalEntries.push({ from: path, to: target, sizeBytes });
       } catch (err) {
         console.error(`Attachment Audit: could not move ${path}`, err);
         failed++;
       }
     }
+    await this.recordBatch("move", journalEntries);
     this.reportBulk("Moved", moved.length, skipped, failed);
     if (inSubfolder.length > 0) {
       new Notice(
@@ -990,7 +1032,9 @@ export default class AttachmentManagerPlugin extends Plugin {
       return null;
     }
     try {
+      const sizeBytes = file.stat.size;
       await this.app.fileManager.renameFile(file, target);
+      await this.recordBatch("rename", [{ from: path, to: target, sizeBytes }]);
       new Notice(`${PRODUCT_NAME}: renamed to ${attachmentBaseName(target)}.`);
       return target;
     } catch (err) {
@@ -998,6 +1042,170 @@ export default class AttachmentManagerPlugin extends Plugin {
       new Notice(`${PRODUCT_NAME}: rename failed. See the console.`);
       return null;
     }
+  }
+
+  // --- Cleanup history ------------------------------------------------------
+
+  /**
+   * Record one completed action. Called AFTER the mutation, with only the files
+   * that actually changed, so the history can never claim something that didn't
+   * happen. A `journalLimit` of 0 turns recording off entirely.
+   */
+  private async recordBatch(
+    op: CleanupOp,
+    entries: JournalEntry[],
+    trashDestination?: TrashDestination
+  ): Promise<void> {
+    if (entries.length === 0 || this.settings.journalLimit <= 0) return;
+    const batch: JournalBatch = {
+      id: newId("batch"),
+      at: new Date().toISOString(),
+      op,
+      trashDestination,
+      entries,
+    };
+    this.settings.journal = appendBatch(this.settings.journal, batch, this.settings.journalLimit);
+    await this.saveSettings();
+  }
+
+  /**
+   * Put a recorded batch back. Returns what was restored and what could not be.
+   *
+   * Deliberately best-effort per file rather than all-or-nothing: a partial
+   * restore beats refusing to restore anything because one file has since moved,
+   * and the caller is told exactly which ones failed.
+   */
+  async restoreBatch(batchId: string): Promise<{ restored: string[]; failed: string[] }> {
+    const batch = this.settings.journal.find((b) => b.id === batchId);
+    const restored: string[] = [];
+    const failed: string[] = [];
+    if (!batch) return { restored, failed };
+
+    const verdict = restorability(batch);
+    if (!verdict.restorable) {
+      new Notice(`${PRODUCT_NAME}: ${verdict.reason ?? "this cannot be restored."}`);
+      return { restored, failed };
+    }
+
+    // Reverse order, so a batch that moved A onto B's old path undoes B first.
+    for (const entry of [...batch.entries].reverse()) {
+      try {
+        const ok =
+          batch.op === "trash"
+            ? await this.restoreFromLocalTrash(entry)
+            : await this.reverseMove(entry);
+        if (ok) restored.push(entry.from);
+        else failed.push(entry.from);
+      } catch (err) {
+        console.error(`Attachment Audit: could not restore ${entry.from}`, err);
+        failed.push(entry.from);
+      }
+    }
+
+    if (restored.length > 0) {
+      this.settings.journal = replaceBatch(this.settings.journal, batchId, (b) => ({
+        ...b,
+        revertedAt: new Date().toISOString(),
+      }));
+      await this.saveSettings();
+    }
+
+    const parts = [`restored ${restored.length} file${restored.length === 1 ? "" : "s"}`];
+    if (failed.length > 0) parts.push(`${failed.length} could not be put back — see the console`);
+    new Notice(`${PRODUCT_NAME}: ${parts.join(", ")}.`);
+    if (restored.length > 0) await this.settleCacheThenRescan(restored);
+    else this.refreshViews();
+    return { restored, failed };
+  }
+
+  /** Reverse a move or rename by renaming the file back where it came from. */
+  private async reverseMove(entry: JournalEntry): Promise<boolean> {
+    if (!entry.to) return false;
+    const file = this.app.vault.getFileByPath(entry.to);
+    if (!file) return false; // moved again, or deleted, since the action
+    // Its original home may be occupied now; never overwrite something to undo.
+    const target = uniquePath(entry.from, (p) => this.pathExistsCI(p, entry.to));
+    if (this.pathExistsCI(target, entry.to)) return false;
+    await this.ensureParentFolder(target);
+    await this.app.fileManager.renameFile(file, target);
+    return true;
+  }
+
+  /**
+   * Move a file back out of the vault's local `.trash`.
+   *
+   * Obsidian does not report where it put the file and renames on collision, so
+   * we search: exact filename first, then the numbered variants, preferring a
+   * size match. Only ever reached when the batch recorded `local` — the system
+   * recycle bin is not addressable from a plugin, and a permanent delete leaves
+   * nothing to find.
+   */
+  private async restoreFromLocalTrash(entry: JournalEntry): Promise<boolean> {
+    const adapter = this.app.vault.adapter;
+    if (!adapter) return false;
+    const name = attachmentBaseName(entry.from);
+    const { stem, ext } = splitExtension(name);
+
+    let listing: string[];
+    try {
+      if (!(await adapter.exists(TRASH_DIR))) return false;
+      listing = (await adapter.list(TRASH_DIR)).files;
+    } catch {
+      return false;
+    }
+
+    const suffixed = new RegExp(`^${escapeRegExp(stem)}[ _-]?\\(?\\d+\\)?$`);
+    const candidates = listing.filter((p) => {
+      const base = attachmentBaseName(p);
+      if (base === name) return true;
+      const parts = splitExtension(base);
+      return parts.ext === ext && suffixed.test(parts.stem);
+    });
+    if (candidates.length === 0) return false;
+
+    // Prefer an exact size match, then the most recently modified.
+    let best: string | null = null;
+    let bestScore = -Infinity;
+    for (const candidate of candidates) {
+      let score = 0;
+      try {
+        const stat = await adapter.stat(candidate);
+        if (stat) {
+          if (stat.size === entry.sizeBytes) score += 1e15;
+          score += stat.mtime;
+        }
+      } catch {
+        /* unreadable candidate: still usable, just least preferred */
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        best = candidate;
+      }
+    }
+    if (!best) return false;
+
+    const target = uniquePath(entry.from, (p) => this.pathExistsCI(p));
+    if (this.pathExistsCI(target)) return false;
+    await this.ensureParentFolder(target);
+    await adapter.rename(best, target);
+    return true;
+  }
+
+  /** Recreate the folder a restored file used to live in, if it has since gone. */
+  private async ensureParentFolder(path: string): Promise<void> {
+    const dir = dirName(path);
+    if (!dir || this.app.vault.getAbstractFileByPath(dir)) return;
+    try {
+      await this.app.vault.createFolder(dir);
+    } catch {
+      /* may already exist, or be created concurrently */
+    }
+  }
+
+  async clearJournal(): Promise<void> {
+    this.settings.journal = [];
+    await this.saveSettings();
+    this.refreshViews();
   }
 
   /**
@@ -1040,15 +1248,39 @@ export default class AttachmentManagerPlugin extends Plugin {
    * Honest one-liner about where trashed files go, per the user's actual "Deleted
    * files" setting — so we never promise recoverability when it's set to permanent.
    */
-  trashDestinationNote(): string {
+  /**
+   * Where a trashed file will go, per the user's "Deleted files" setting. Only
+   * `local` is reachable from a plugin, so this is what decides whether the
+   * cleanup history can offer a restore.
+   */
+  trashDestination(): TrashDestination {
     const opt = (this.app.vault as unknown as { getConfig?: (k: string) => unknown }).getConfig?.(
       "trashOption"
     );
-    if (opt === "none") return "Your 'Deleted files' setting is 'Permanently delete', so this cannot be undone.";
-    if (opt === "local") return "They go to the vault's .trash folder and can be restored.";
-    if (opt === "system") return "They go to your system trash and can be restored.";
-    // Unknown/older API: don't promise recoverability — point at the setting.
-    return "They go to Obsidian's configured trash — check your 'Deleted files' setting, as it may not be reversible.";
+    switch (opt) {
+      case "local":
+        return "local";
+      case "system":
+        return "system";
+      case "none":
+        return "permanent";
+      default:
+        return "unknown"; // older API, or a value we don't recognise
+    }
+  }
+
+  trashDestinationNote(): string {
+    switch (this.trashDestination()) {
+      case "permanent":
+        return "Your 'Deleted files' setting is 'Permanently delete', so this cannot be undone.";
+      case "local":
+        return "They go to the vault's .trash folder, and Attachment Audit can put them back.";
+      case "system":
+        return "They go to your system trash and can be restored from there.";
+      default:
+        // Don't promise recoverability we can't verify — point at the setting.
+        return "They go to Obsidian's configured trash — check your 'Deleted files' setting, as it may not be reversible.";
+    }
   }
 
   private reportBulk(verb: string, done: number, skipped: number, failed: number, bytes = 0): void {

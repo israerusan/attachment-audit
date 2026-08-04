@@ -3,6 +3,10 @@
 // dependency-free (no `obsidian` import) so the core is pure and unit-testable
 // under Node.
 
+import type { JournalBatch } from "./core/journal/actionJournal";
+
+export type { JournalBatch };
+
 export type IssueType =
   | "unused"
   | "duplicate"
@@ -34,6 +38,13 @@ export const ISSUE_TYPE_LABELS: Record<IssueType, string> = {
 };
 
 export type SortMode = "severity" | "size" | "name" | "path";
+
+/**
+ * Where a trashed file went, per Obsidian's "Deleted files" setting. Recorded on
+ * each batch at the time of the action, because only `local` is reachable from a
+ * plugin and the user can change the setting afterwards.
+ */
+export type TrashDestination = "local" | "system" | "permanent" | "unknown";
 
 // --- Attachment snapshot handed to the pure detectors -----------------------
 
@@ -187,6 +198,11 @@ export interface AttachmentManagerSettings {
 
   /** Show inline image previews in the results list. */
   showThumbnails: boolean;
+
+  /** Cleanup history, newest first. See `core/journal/actionJournal.ts`. */
+  journal: JournalBatch[];
+  /** How many history entries to keep. 0 disables recording entirely. */
+  journalLimit: number;
 
   savedProfiles: ScanProfile[];
   customRules: CustomRule[];

@@ -6,6 +6,7 @@
 import { ISSUE_TYPES } from "../../types";
 import type { AttachmentManagerSettings } from "../../types";
 import { DEFAULT_JUNK_NAME_PATTERNS } from "../naming/namePatterns";
+import { DEFAULT_JOURNAL_LIMIT } from "../journal/actionJournal";
 import { SCHEMA_VERSION } from "./normalize";
 
 export const DEFAULT_SETTINGS: AttachmentManagerSettings = {
@@ -33,6 +34,8 @@ export const DEFAULT_SETTINGS: AttachmentManagerSettings = {
   },
   sortMode: "severity",
   showThumbnails: true,
+  journal: [],
+  journalLimit: DEFAULT_JOURNAL_LIMIT,
   savedProfiles: [],
   customRules: [],
   onboardingDismissed: false,

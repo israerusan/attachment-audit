@@ -20,6 +20,8 @@ function baseSettings(): AttachmentManagerSettings {
     severityWeights: { unused: 3, duplicate: 3, large: 2, unnamed: 1, misplaced: 1, missing: 3, custom: 2 },
     sortMode: "severity",
     showThumbnails: true,
+    journal: [],
+    journalLimit: 50,
     savedProfiles: [],
     customRules: [],
     onboardingDismissed: false,

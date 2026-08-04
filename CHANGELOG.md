@@ -2,6 +2,30 @@
 
 All notable changes to Attachment Audit are documented here. This project adheres to [Keep a Changelog](https://keepachangelog.com/) and [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-08-04
+
+Cleanup history — see everything Attachment Audit changed, and put it back.
+
+Until now, everything backing the claim that this plugin is safe enough to trust with bulk delete was *prose*: a README section, a confirm dialog, a two-signal safety contract you had to take on faith. This release makes it evidence.
+
+### Added
+
+- **Cleanup history.** Every trash, move and rename is recorded — which files, from where, to where, how big, and when. Open it from the dashboard, the command palette, or settings.
+- **Restore.** Put a whole action back in one click. **Free, at any size** — Pro is for doing cleanup at scale; recovering from it is safety, not scale.
+- Reversing a move or rename goes back through Obsidian, so every link it updated on the way out is updated again on the way back.
+- **Honest about what it cannot do.** Only files sent to the vault's `.trash` folder can be restored by a plugin. A batch that went to your system trash says so and points you there; one that was permanently deleted says that plainly. Anything the plugin cannot verify fails closed rather than offering an undo that would not work.
+- Where trashed files went is recorded **at the time of the action**, so changing your "Deleted files" setting afterwards can never make the history offer an impossible restore.
+- A "Cleanup history entries" setting controls how much is kept (0 records nothing).
+
+### Changed
+
+- The trash confirmation now says Attachment Audit itself can put local-trash files back, rather than only that they are recoverable.
+
+### Internal
+
+- Settings schema version 3, with a migration from 2. Vaults upgrading from 1.1.0 start with an empty history — actions taken before there was anywhere to record them cannot be reconstructed, and inventing entries would offer restores that cannot work.
+- `trashDestinationNote()` now derives from a typed `trashDestination()` accessor, retiring one of the untyped internal-API casts.
+
 ## [1.1.0] - 2026-08-03
 
 A safety, performance and interface release. **If you use the unused detector, update.**

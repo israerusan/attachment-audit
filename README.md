@@ -53,6 +53,23 @@ It also keeps cleanup sane:
 - duplicate cleanup only removes copies nothing links to, and never trashes every copy
 - destructive actions re-validate before acting, and show you exactly which files they will touch
 - if any source file cannot be read, nothing is flagged unused that run
+- **everything it changes is recorded, and you can put it back**
+
+## Cleanup history
+
+Every trash, move and rename is recorded: which files, from where, to where, and when. Open it from the dashboard, the command palette, or settings — and click once to put a whole action back.
+
+Restoring is **free at any size**. Pro is for doing cleanup at scale; recovering from cleanup is safety, not scale.
+
+It is also honest about what it cannot do. Only files sent to the vault's `.trash` folder can be restored by a plugin:
+
+| Your "Deleted files" setting | Can Attachment Audit restore it? |
+| --- | --- |
+| Move to Obsidian trash (`.trash`) | Yes, in one click |
+| Move to system trash | No — it tells you to restore from there |
+| Permanently delete | No, and it says so before you confirm |
+
+Where a trashed file went is recorded at the moment of the action, so changing that setting later can never make the history offer a restore that would not work. Moves and renames are always reversible, and reversing one re-updates every link it changed.
 
 ## Free vs Pro
 
@@ -68,6 +85,7 @@ Free is a complete audit tool. Pro is for *changing* many files at once.
 | Per-detector thresholds and exclusions | ✓ | ✓ |
 | Multi-select, bulk ignore and bulk mark-reviewed | ✓ | ✓ |
 | Markdown report export | ✓ | ✓ |
+| Cleanup history and restore | ✓ | ✓ |
 | Your first bulk cleanup | ✓ | ✓ |
 | Unlimited bulk trash, dedupe and move |  | ✓ |
 | Saved scan profiles |  | ✓ |

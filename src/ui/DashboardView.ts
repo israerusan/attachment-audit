@@ -7,6 +7,8 @@ import { countByType, sortIssues } from "../core/rules/severity";
 import { computeReclaim } from "../core/reclaim/reclaimableSpace";
 import { formatBytes } from "../core/utils/sizes";
 import { renderResultsList } from "./ResultsList";
+import { openHistory } from "./HistoryModal";
+import { restorability } from "../core/journal/actionJournal";
 import { requirePro } from "./pro/ProGate";
 import { PRODUCT_NAME, PRO_PRICE_LABEL, PRO_TAGLINE, PURCHASE_URL } from "../product";
 
@@ -140,6 +142,7 @@ export class AttachmentManagerView extends ItemView {
       } else {
         this.metaEl = root.createDiv({ cls: "attachment-audit-meta" });
         this.renderHydratedMeta(root);
+        this.renderHistoryLink(root);
         if (!this.plugin.isPro) this.renderProCta(root);
       }
       return;
@@ -183,6 +186,7 @@ export class AttachmentManagerView extends ItemView {
       });
     }
 
+    this.renderHistoryLink(root);
     if (!this.plugin.isPro) this.renderProCta(root);
   }
 
@@ -495,6 +499,26 @@ export class AttachmentManagerView extends ItemView {
       if (!this.bulkMode) this.selected.clear();
       this.render();
     });
+  }
+
+  /**
+   * A standing link to what this plugin has already changed. Shown whenever there
+   * is history — including after a clean scan, because "what did it do last time"
+   * is exactly the question a user has when the dashboard shows nothing to do.
+   */
+  private renderHistoryLink(root: HTMLElement): void {
+    const journal = this.plugin.settings.journal;
+    if (journal.length === 0) return;
+    const restorable = journal.filter((b) => restorability(b).restorable).length;
+    const bar = root.createDiv({ cls: "attachment-audit-history-link" });
+    const btn = bar.createEl("button", { cls: "attachment-audit-inline-link" });
+    setIcon(btn.createSpan({ cls: "attachment-audit-history-link-icon" }), "history");
+    btn.createSpan({
+      text: restorable > 0
+        ? `Cleanup history — ${restorable} action${restorable === 1 ? "" : "s"} can be undone`
+        : "Cleanup history",
+    });
+    btn.addEventListener("click", () => openHistory(this.plugin));
   }
 
   /**

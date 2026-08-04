@@ -8,6 +8,11 @@
 // "the plugin is broken".
 
 import { ISSUE_TYPES } from "../../types";
+import {
+  DEFAULT_JOURNAL_LIMIT,
+  MAX_JOURNAL_LIMIT,
+  normalizeJournal,
+} from "../journal/actionJournal";
 import type {
   AttachmentManagerSettings,
   CustomRule,
@@ -18,7 +23,7 @@ import type {
 } from "../../types";
 
 /** Current schema version. Bump when a migration is added below. */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 const SORT_MODES: SortMode[] = ["severity", "size", "name", "path"];
 
@@ -46,6 +51,19 @@ const MIGRATIONS: Record<number, (raw: RawSettings) => RawSettings> = {
   // READ on load (it was written but never inspected before), which is what makes
   // every future migration possible.
   1: (raw) => ({ ...raw, version: 2 }),
+  // 2 -> 3 adds the cleanup journal. A vault upgrading from 1.1.0 has no history,
+  // and starting it empty is correct — we cannot reconstruct actions taken before
+  // there was anywhere to record them, and inventing entries would offer restores
+  // that cannot work.
+  2: (raw) => ({
+    ...raw,
+    journal: Array.isArray(raw.journal) ? raw.journal : [],
+    journalLimit:
+      typeof raw.journalLimit === "number" && Number.isFinite(raw.journalLimit)
+        ? raw.journalLimit
+        : DEFAULT_JOURNAL_LIMIT,
+    version: 3,
+  }),
 };
 
 function isStringArray(value: unknown): value is string[] {
@@ -292,6 +310,11 @@ export function normalizeSettings(
   // write or a sync conflict produces — threw a TypeError inside render() on
   // startup and left the pane blank. Drop a summary we can't render.
   s.lastScanSummary = normalizeSummary(s.lastScanSummary);
+
+  // The journal drives a RESTORE button, so a malformed batch is worse than a
+  // missing one — it would offer an undo that fails halfway through.
+  s.journalLimit = clampNumber(s.journalLimit, DEFAULT_JOURNAL_LIMIT, 0, MAX_JOURNAL_LIMIT);
+  s.journal = normalizeJournal(s.journal, s.journalLimit as number);
 
   // Drop profiles and rules that lost their identity — they can't be edited or
   // deleted from the UI, so they'd be permanent junk — then validate what's LEFT.
