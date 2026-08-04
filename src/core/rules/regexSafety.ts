@@ -64,7 +64,14 @@ const UNBOUNDED_CHOICES = 64;
 const MAX_SEARCH_SPACE = UNBOUNDED_CHOICES ** 3; // 262,144 — three open-ended repeats
 
 interface GroupFrame {
-  /** Index of the `(` that opened this group. */
+  /**
+   * Index of the first character of the group's BODY — after any `(?:`, `(?=`,
+   * `(?<name>` prefix. Scanning from the `(` instead meant the prefix's own `?`
+   * was read as a quantifier on the group's body: every repeated non-capturing
+   * group (`^(?:ab)+$`, `^(?:img|dsc)+$`) was refused with a message about
+   * nested repetition it did not contain, and each `(?` silently doubled the
+   * search-space budget.
+   */
   start: number;
   /** The body contains an unbounded quantifier, so it is ambiguous. */
   hasQuantifier: boolean;
@@ -92,6 +99,27 @@ function quantifierRangeAt(pattern: string, i: number): RepeatRange | null {
   if (bounded[2] === undefined) return { min, max: min }; // {n}
   if (bounded[2] === "") return { min, max: Infinity }; // {n,}
   return { min, max: Number(bounded[2]) }; // {n,m}
+}
+
+/**
+ * True for a quantifier that ERASES its atom: `{0}` or `{0,0}`.
+ *
+ * These break the alternation disjointness proof in a way nothing else does.
+ * That proof assumes each alternative's leading atom must consume a character,
+ * so two branches with non-overlapping first atoms can never both match the same
+ * text. Every other way to make that atom optional — `?`, `*`, `{0,n}`, `{0,}` —
+ * has `max > min` and already poisons the group via
+ * {@link variableLengthQuantifierAt}. A zero-repeat has `max === min === 0`, so
+ * it slipped through all three checks: `^(a{0}b|b)+$` was read as branches `a`
+ * and `b` (disjoint, safe) while the engine sees `^(b|b)+$`. Measured 9,433 ms
+ * for ONE attachment through `matchesJunkName` at 28 characters, and over two
+ * minutes at 35.
+ *
+ * Refusing them outright is complete and simple: `{0}` is never meaningful in a
+ * name rule, since it matches the empty string.
+ */
+function erasesItsAtom(range: RepeatRange): boolean {
+  return range.max === 0;
 }
 
 /**
@@ -253,19 +281,21 @@ function setsIntersect(a: Set<number>, b: Set<number>): boolean {
  * True when a group's alternatives might match the same text, which is what makes
  * repeating the group exponential.
  */
-function alternativesAmbiguous(body: string, breaks: number[], groupStart: number): boolean {
+function alternativesAmbiguous(body: string, breaks: number[], bodyStart: number): boolean {
   if (breaks.length === 0) return false; // no alternation at all
   const alts: string[] = [];
   let from = 0;
   for (const b of breaks) {
-    alts.push(body.slice(from, b - groupStart - 1));
-    from = b - groupStart;
+    alts.push(body.slice(from, b - bodyStart));
+    from = b - bodyStart + 1;
   }
   alts.push(body.slice(from));
 
   const charsets: Set<number>[] = [];
   for (const alt of alts) {
-    const set = firstAtomCharset(alt.trim());
+    // NOT trimmed: a leading space is a real atom, and analysing a different
+    // string than the engine matches makes the disjointness proof unsound.
+    const set = firstAtomCharset(alt);
     if (set === null) return true; // cannot prove disjoint -> assume the worst
     charsets.push(set);
   }
@@ -317,14 +347,20 @@ export function checkRegexSafety(pattern: string): RegexSafetyVerdict {
       if (stack.length >= MAX_GROUP_DEPTH) {
         return { safe: false, reason: "Pattern nests groups too deeply." };
       }
-      stack.push({ start: i, hasQuantifier: false, altBreaks: [] });
+      // Step over the group-kind prefix — `?:`, `?=`, `?!`, `?<=`, `?<!`,
+      // `?<name>` — so its `?` is not scanned as a quantifier, and so the body
+      // handed to the alternation analysis starts at the real first alternative.
+      const prefix = /^\((\?(?::|=|!|<=|<!|<[A-Za-z_$][\w$]*>))/.exec(pattern.slice(i));
+      const bodyStart = i + 1 + (prefix ? prefix[1].length : 0);
+      stack.push({ start: bodyStart, hasQuantifier: false, altBreaks: [] });
+      if (prefix) i = bodyStart - 1; // the loop's i++ lands on the body
       continue;
     }
 
     if (c === ")") {
       const frame = stack.pop();
       if (!frame) continue; // unbalanced — `new RegExp` will reject it below
-      const body = pattern.slice(frame.start + 1, i);
+      const body = pattern.slice(frame.start, i);
       const ambiguous =
         frame.hasQuantifier || alternativesAmbiguous(body, frame.altBreaks, frame.start);
       // A repeated group whose body is itself ambiguous is the classic
@@ -347,6 +383,15 @@ export function checkRegexSafety(pattern: string): RegexSafetyVerdict {
       continue;
     }
 
+    const range = quantifierRangeAt(pattern, i);
+    if (range !== null && erasesItsAtom(range)) {
+      return {
+        safe: false,
+        reason:
+          "Pattern contains a repeat of zero (like `a{0}`), which matches nothing. " +
+          "Remove it — it can also make the pattern hang Obsidian.",
+      };
+    }
     // The search-space budget applies at EVERY nesting level, not just inside a
     // group: a chain of quantifiers with no group at all is the second documented
     // blow-up shape, and it has a bounded variant (`a{1,50}` x6) as well as an

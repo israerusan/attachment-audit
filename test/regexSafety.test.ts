@@ -182,3 +182,45 @@ assert.ok(!safe("^\w+\w+\w+\w{1,3}$"), "four crosses 150ms per attachment");
 assert.ok(!safe("^\w+\w{1,25}\w{1,25}\w{1,25}$"));
 
 console.log("regexSafety optional-in-group + budget tests passed");
+
+// --- A zero-repeat ERASES its atom and voids the disjointness proof ---------
+// The alternation check assumes each branch's leading atom must consume a
+// character. `?`, `*`, `{0,n}` and `{0,}` all have max > min and already poison
+// the group; `{0}` has max === min === 0 and slipped through every check, so
+// `^(a{0}b|b)+$` was read as branches `a` and `b` (disjoint, safe) while the
+// engine sees `^(b|b)+$`. Measured 9,433 ms for ONE attachment at 28 chars.
+for (const p of [
+  "^(a{0}b|b)+$", "^(\\d{0}b|b)+$", "^(a{0,0}b|b)+$",
+  "^(b|a{0}b)+$", "^([q]{0}b|b)+$", "^(ab|\\d{0}\\w)+$",
+]) {
+  assert.ok(!safe(p), `zero-repeat must be refused: ${p}`);
+}
+assert.ok(!safe("a{0}"), "a bare zero-repeat is meaningless anyway");
+assert.ok(!safe("a{0,0}"));
+// A zero MINIMUM is fine — only a zero MAXIMUM erases the atom.
+assert.ok(safe("^a{0,5}$"));
+assert.ok(safe("^ab*c$"));
+
+// --- Group-kind prefixes must not be parsed as quantifiers ------------------
+// Scanning from `(` meant the `?` in `(?:` was read as a quantifier on the
+// group's own body: every repeated non-capturing group was refused with a
+// message about nested repetition it did not contain, and each `(?` doubled the
+// search-space budget.
+assert.ok(safe("^(?:ab)+$"));
+assert.ok(safe("^(?:ab)*$"));
+assert.ok(safe("^(?:ab){2,4}$"));
+assert.ok(safe("^(?:a|b)+$"));
+assert.ok(safe("^(?:img|dsc|pxl)+$"), "non-capturing must behave like capturing");
+assert.ok(safe("^(?=a)ab$"), "lookahead");
+// Many group prefixes must not accumulate budget — none of these repeat anything.
+assert.ok(safe("^" + "(?:a)".repeat(19) + "$"));
+assert.ok(safe("^" + "(?=a)".repeat(19) + "$"));
+// ...and a non-capturing group must not launder a genuinely dangerous body.
+assert.ok(!safe("^(?:a+)+$"));
+assert.ok(!safe("^(?:a|aa)+$"));
+assert.ok(!safe("^(?:aa?)+$"));
+
+// The alternation analysis must see the real first alternative, not the prefix.
+assert.ok(!safe("^(?:a|ab)+$"), "overlapping branches inside a non-capturing group");
+
+console.log("regexSafety zero-repeat + group-prefix tests passed");
