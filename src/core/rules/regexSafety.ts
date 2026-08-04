@@ -165,37 +165,10 @@ function repeatsMoreThanOnceAt(pattern: string, i: number): boolean {
 }
 
 /**
- * The single character an alternative's FIRST atom matches, or `null` when that
- * cannot be established trivially. Two alternatives whose first atoms cannot
- * match the same character can never both consume the same input, so the
- * alternation is unambiguous and safe to repeat.
- *
- * This models ONE thing: a plain literal character. Anything else — a class, any
- * escape, a group, a metacharacter — returns `null`, which makes the caller treat
- * the alternation as ambiguous and refuse to repeat it.
- *
- * That is a deliberate retreat. This function previously modelled character
- * classes, ranges and shorthand escapes so that `^(\w|-)+$` would be accepted,
- * and it was WRONG SEVEN TIMES, every time in the unsafe direction: an
- * under-approximated charset proves overlapping branches disjoint, and the
- * accepted pattern then freezes the renderer for minutes. The catalogue:
- * negated shorthands modelled as ASCII-only (`\S` does match `é`), in-class
- * escapes read as the literal letter (`[A]` is `A`, not `x`), an escaped `]`
- * truncating the class and throwing a RangeError, escaped range endpoints, and
- * reversed ranges silently contributing nothing.
- *
- * The feature was never worth it: NONE of the ten shipped default patterns, and
- * none of the realistic user rules surveyed, contains an alternation directly
- * under a repeat. The cost of the retreat is that `^(\w|-)+$` is refused — and
- * its natural spelling `^[\w-]+$` is not an alternation at all, so it is
- * unaffected. What remains is one literal character compared under the `i` flag's
- * canonicalization, which is small enough to be obviously correct.
- */
-/**
- * Characters that start something this function refuses to model: a backslash
- * escape, a class, a group, or a quantifier/anchor that means the leading atom is
- * not a plain literal. Built from a list rather than a string literal so no
- * amount of escaping confusion can quietly drop the backslash from it.
+ * Characters that start something {@link firstAtomCharset} refuses to model: a
+ * backslash escape, a class, a group, or a quantifier/anchor meaning the leading
+ * atom is not a plain literal. Built from a list rather than a string literal so
+ * no amount of escaping confusion can quietly drop the backslash from it.
  */
 const UNMODELLABLE_FIRST_CHARS: ReadonlySet<string> = new Set([
   String.fromCharCode(92), // backslash
@@ -214,12 +187,44 @@ const UNMODELLABLE_FIRST_CHARS: ReadonlySet<string> = new Set([
   "|",
 ]);
 
-function firstAtomCharset(alt: string): Set<number> | null {
+/**
+ * The single character an alternative's FIRST atom matches, or `null` when that
+ * cannot be established trivially. Two alternatives whose first atoms cannot
+ * match the same character can never both consume the same input, so the
+ * alternation is unambiguous and safe to repeat.
+ *
+ * This models ONE thing: a plain literal character. Anything else — a class, any
+ * escape, a group, a metacharacter — returns `null`, which makes the caller treat
+ * the alternation as ambiguous and refuse to repeat it.
+ *
+ * That is a deliberate retreat. This function previously modelled character
+ * classes, ranges and shorthand escapes so that `^(\w|-)+$` would be accepted,
+ * and it was WRONG SEVEN TIMES, every time in the unsafe direction: an
+ * under-approximated charset proves overlapping branches disjoint, and the
+ * accepted pattern then freezes the renderer for minutes. The catalogue:
+ *
+ *   - negated shorthands modelled as ASCII-only (`\S` does match `é`)
+ *   - in-class escapes read as the literal letter (`[\x41]` is `A`, not `x`)
+ *   - an escaped `]` truncating the class, then throwing a RangeError
+ *   - escaped range endpoints (`[\.-o]`, `[a-\d]`)
+ *   - reversed ranges silently contributing nothing (`[\d-a-0]`)
+ *
+ * The feature was never worth it: NONE of the ten shipped default patterns, and
+ * none of the realistic user rules surveyed, contains an alternation directly
+ * under a repeat. The cost of the retreat is that `^(\w|-)+$` is refused — and
+ * its natural spelling `^[\w-]+$` is not an alternation at all, so it is
+ * unaffected. What remains is one literal character compared under the `i` flag's
+ * canonicalization, which is small enough to be obviously correct.
+ */
+function firstAtom(alt: string): number | null {
   const c = alt[0];
   if (c === undefined) return null; // empty alternative: `(a|)+` loops forever
   if (UNMODELLABLE_FIRST_CHARS.has(c)) return null;
-  return new Set([c.codePointAt(0) as number]);
+  // codePointAt on a single UTF-16 unit, matching the engine: neither caller
+  // compiles with the `u` flag, so an astral character is two units to both of us.
+  return c.codePointAt(0) ?? null;
 }
+
 /**
  * Fold one code point exactly the way the `i` flag does — ECMAScript's
  * Canonicalize: uppercase it, keep the result only if it is a single character
@@ -243,25 +248,23 @@ function canonicalize(c: number): number {
 }
 
 /**
- * Fold a charset for case-insensitive comparison. BOTH callers compile with the
- * `i` flag (`namePatterns.ts` and `customRuleEngine.ts`), so `(a|A)+` — judged
- * disjoint on raw code points, {97} vs {65} — is actually two identical branches.
+ * Whether two modelled first atoms can match the same character, under the `i`
+ * flag both callers compile with.
  *
- * This was ASCII-only at first, which left the whole of Latin-1 Supplement, Latin
- * Extended, Greek and Cyrillic unfolded: a sweep found **2,261** accepted
- * `^(lower|upper)+$` pairs that are identical under `i`. `^(é|É)+$` was accepted
- * and took over 20 seconds on a 64-character input.
+ * Deliberately takes CODE POINTS, not sets. `firstAtomCharset` used to return a
+ * modelled character SET — for classes and shorthand escapes — and that
+ * modelling was the source of seven separate accept-then-hang defects before it
+ * was removed. Keeping a set-shaped interface here would leave the obvious place
+ * for someone to reintroduce it.
+ *
+ * Case folding matters: `(a|A)+` looks disjoint on raw code points ({97} vs
+ * {65}) and is two identical branches under `i`. Folding was ASCII-only at first,
+ * which left Latin-1, Latin Extended, Greek and Cyrillic unfolded — a sweep found
+ * 2,261 accepted `^(lower|upper)+$` pairs that are one branch, and `^(é|É)+$`
+ * took over 20 seconds on a 64-character input.
  */
-function caseFold(set: Set<number>): Set<number> {
-  const folded = new Set<number>();
-  for (const c of set) folded.add(canonicalize(c));
-  return folded;
-}
-
-function setsIntersect(a: Set<number>, b: Set<number>): boolean {
-  const [small, large] = a.size <= b.size ? [caseFold(a), caseFold(b)] : [caseFold(b), caseFold(a)];
-  for (const v of small) if (large.has(v)) return true;
-  return false;
+function atomsCollide(a: number, b: number): boolean {
+  return canonicalize(a) === canonicalize(b);
 }
 
 /**
@@ -278,17 +281,19 @@ function alternativesAmbiguous(body: string, breaks: number[], bodyStart: number
   }
   alts.push(body.slice(from));
 
-  const charsets: Set<number>[] = [];
+  const heads: number[] = [];
   for (const alt of alts) {
     // NOT trimmed: a leading space is a real atom, and analysing a different
     // string than the engine matches makes the disjointness proof unsound.
-    const set = firstAtomCharset(alt);
-    if (set === null) return true; // cannot prove disjoint -> assume the worst
-    charsets.push(set);
+    const head = firstAtom(alt);
+    if (head === null) return true; // cannot prove disjoint -> assume the worst
+    heads.push(head);
   }
-  for (let i = 0; i < charsets.length; i++) {
-    for (let j = i + 1; j < charsets.length; j++) {
-      if (setsIntersect(charsets[i], charsets[j])) return true;
+  // EVERY pair, not just adjacent ones: an overlap between branches 1 and 3 is
+  // just as exponential as one between 1 and 2.
+  for (let i = 0; i < heads.length; i++) {
+    for (let j = i + 1; j < heads.length; j++) {
+      if (atomsCollide(heads[i], heads[j])) return true;
     }
   }
   return false;
