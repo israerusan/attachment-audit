@@ -228,3 +228,26 @@ assert.ok(!couldBeTrashedAs("report (2024).pdf", "report.pdf"));
 }
 
 console.log("trashCandidates counter-bound tests passed");
+
+// --- NFC must be handled by couldBeTrashedAs ITSELF -------------------------
+// `main.ts` pre-filters the trash listing with `couldBeTrashedAs` before the
+// selector ever runs. An earlier version normalized only inside the selector, so
+// the pre-filter discarded every NFD candidate first and the fix was inert on
+// exactly the platform it was written for — while these tests passed, because
+// they exercised the selector rather than the shipped path. Test the layer that
+// actually ships.
+{
+  const nfc = "café.png".normalize("NFC");
+  const nfd = "café.png".normalize("NFD");
+  assert.notStrictEqual(nfc, nfd, "the fixture really is two different strings");
+  assert.ok(couldBeTrashedAs(nfd, nfc), "NFD on disk matches an NFC record");
+  assert.ok(couldBeTrashedAs(nfc, nfd), "and the reverse");
+  // The counter goes on the STEM, not the whole filename.
+  const nfdSuffixed = "café 1.png".normalize("NFD");
+  assert.ok(couldBeTrashedAs(nfdSuffixed, nfc), "including the suffixed form");
+  // Hangul and other scripts the earlier combining-mark approach missed.
+  const ko = "한글.png";
+  assert.ok(couldBeTrashedAs(ko.normalize("NFD"), ko.normalize("NFC")));
+}
+
+console.log("trashCandidates NFC pre-filter tests passed");

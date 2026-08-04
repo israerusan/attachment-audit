@@ -40,11 +40,13 @@ export interface JournalEntry {
    *
    * Name, size and mtime are all circumstantial: `.trash` holds everything the
    * user ever deleted, Obsidian's collision naming is undocumented, and mtime
-   * preservation is unverified. Content is not circumstantial. Hashing only the
-   * head keeps it cheap on a 2 GB video while still being decisive — two files
-   * with the same size and the same first 64 KB are the same file for every
-   * practical purpose, and in the one case they are not (byte-identical
-   * duplicates) restoring either is equally correct.
+   * preservation is unverified. Content is not circumstantial.
+   *
+   * Hashing only the head bounds the DIGEST, not the read — `DataAdapter` has no
+   * ranged read, so the whole file is loaded either way. Files above
+   * {@link HASH_MAX_BYTES} are therefore not hashed at all, and fall back to the
+   * weaker name-and-size check; that degradation is deliberate rather than a
+   * silent out-of-memory failure on the largest files.
    */
   headHash?: string;
   /**
@@ -58,6 +60,18 @@ export interface JournalEntry {
 
 /** How many leading bytes {@link JournalEntry.headHash} covers. */
 export const HEAD_HASH_BYTES = 64 * 1024;
+
+/**
+ * Files above this size are not hashed at all.
+ *
+ * `DataAdapter` has no ranged read, so hashing 64 KB still loads the WHOLE file.
+ * Without this ceiling, bulk-trashing a media library would read tens of
+ * gigabytes before the trash even starts — and a file large enough to fail the
+ * ArrayBuffer allocation would throw, get swallowed, and silently fall back to
+ * the weaker check. Making the fallback explicit and size-based means the
+ * degradation is a decision rather than an accident on exactly the biggest files.
+ */
+export const HASH_MAX_BYTES = 64 * 1024 * 1024;
 
 /** One user-visible action, however many files it touched. */
 export interface JournalBatch {

@@ -215,3 +215,42 @@ for (const hostile of [[{ id: "a", at: "2026-08-04T10:00:00Z", op: "trash", entr
 assert.ok(DEFAULT_JOURNAL_LIMIT > 0 && DEFAULT_JOURNAL_LIMIT <= MAX_JOURNAL_LIMIT);
 
 console.log("actionJournal tests passed");
+
+// --- headHash and restoredTo round-trip through data.json -------------------
+// `restoredTo` is the per-entry state that lets a partially-restored batch
+// complete — the mechanism added to fix a data-loss defect, and the one part of
+// that change with no coverage until now.
+{
+  const [only] = normalizeJournal(
+    [{
+      id: "a", at: "2026-08-04T10:00:00Z", op: "trash", trashDestination: "local",
+      entries: [
+        { from: "a.png", sizeBytes: 10, mtime: 5, headHash: "abc", restoredTo: "a.png" },
+        { from: "b.png", sizeBytes: 20 },
+      ],
+    }],
+    10
+  );
+  assert.strictEqual(only.entries[0].headHash, "abc");
+  assert.strictEqual(only.entries[0].restoredTo, "a.png");
+  assert.strictEqual(only.entries[0].mtime, 5);
+  // Absent optionals stay absent rather than becoming empty strings.
+  assert.strictEqual(only.entries[1].headHash, undefined);
+  assert.strictEqual(only.entries[1].restoredTo, undefined);
+  assert.strictEqual(only.entries[1].mtime, undefined);
+}
+// Junk in those fields is dropped, not trusted.
+{
+  const [only] = normalizeJournal(
+    [{
+      id: "a", at: "2026-08-04T10:00:00Z", op: "trash", trashDestination: "local",
+      entries: [{ from: "a.png", sizeBytes: 1, headHash: 42, restoredTo: "", mtime: "soon" }],
+    }],
+    10
+  );
+  assert.strictEqual(only.entries[0].headHash, undefined);
+  assert.strictEqual(only.entries[0].restoredTo, undefined);
+  assert.strictEqual(only.entries[0].mtime, undefined);
+}
+
+console.log("actionJournal headHash/restoredTo tests passed");

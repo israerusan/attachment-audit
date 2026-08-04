@@ -94,11 +94,25 @@ export class HistoryModal extends Modal {
       text: relativeTime(batch.at),
     });
 
+    const done = batch.entries.filter((e) => e.restoredTo).length;
+    const outstanding = batch.entries.length - done;
+
     const files = card.createDiv({ cls: "attachment-audit-history-files" });
     for (const entry of batch.entries.slice(0, MAX_LISTED)) {
       const row = files.createDiv({ cls: "attachment-audit-history-file" });
+      // Show per-entry state. Without it a 3-of-5 restore rendered identically to
+      // an untouched batch, so the only signal the user ever got was a Notice
+      // that had already disappeared.
+      if (entry.restoredTo) {
+        row.addClass("is-restored");
+        setIcon(row.createSpan({ cls: "attachment-audit-history-tick" }), "check");
+      }
       row.createSpan({ text: entry.from });
-      if (entry.to) {
+      if (entry.restoredTo && entry.restoredTo !== entry.from) {
+        // It could not take its original name back, so say where it actually is.
+        row.createSpan({ cls: "attachment-audit-history-arrow", text: " → " });
+        row.createSpan({ text: entry.restoredTo });
+      } else if (entry.to && !entry.restoredTo) {
         row.createSpan({ cls: "attachment-audit-history-arrow", text: " → " });
         row.createSpan({ text: entry.to });
       }
@@ -120,7 +134,17 @@ export class HistoryModal extends Modal {
       return;
     }
 
-    const restore = actions.createEl("button", { text: "Put these back", cls: "mod-cta" });
+    if (done > 0) {
+      actions.createSpan({
+        cls: "attachment-audit-history-note",
+        text: `${done} of ${batch.entries.length} already back`,
+      });
+    }
+
+    const restore = actions.createEl("button", {
+      text: done > 0 ? `Put the remaining ${outstanding} back` : "Put these back",
+      cls: "mod-cta",
+    });
     // Restoring is FREE, at any size, deliberately.
     //
     // Pro's line is doing cleanup at SCALE; recovering from cleanup is not scale,
@@ -133,6 +157,17 @@ export class HistoryModal extends Modal {
       restore.setText("Restoring…");
       void this.plugin.restoreBatch(batch.id).then(() => this.render());
     });
+
+    // An escape hatch for a batch that can never complete — a file deleted from
+    // `.trash`, or one whose content no longer matches. Without this the card
+    // stays live forever and every click re-walks the trash and re-fails, with
+    // no way to acknowledge it and move on.
+    if (done > 0) {
+      const dismiss = actions.createEl("button", { text: "Done with this" });
+      dismiss.addEventListener("click", () => {
+        void this.plugin.dismissBatch(batch.id).then(() => this.render());
+      });
+    }
   }
 }
 

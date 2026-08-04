@@ -1126,3 +1126,23 @@ button.attachment-audit-tile:hover {
 .attachment-audit-history-link-icon {
   display: inline-flex;
 }
+
+/* Per-entry restore state, so a partially-restored batch does not render
+   identically to an untouched one. */
+.attachment-audit-history-file.is-restored {
+  display: flex;
+  align-items: center;
+  gap: var(--size-2-2);
+  color: var(--text-normal);
+}
+
+.attachment-audit-history-tick {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--color-green);
+}
+
+.attachment-audit-history-tick .svg-icon {
+  width: 14px;
+  height: 14px;
+}

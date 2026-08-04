@@ -43,6 +43,7 @@ import {
   appendBatch,
   replaceBatch,
   restorability,
+  HASH_MAX_BYTES,
   HEAD_HASH_BYTES,
   type CleanupOp,
   type JournalBatch,
@@ -871,7 +872,7 @@ export default class AttachmentManagerPlugin extends Plugin {
         const mtime = file.stat.mtime;
         // Read BEFORE the trash: afterwards the file is somewhere we would have
         // to guess at, which is the whole problem this hash exists to remove.
-        const headHash = await this.hashFileHead(file);
+        const headHash = await this.maybeHashHead(file);
         await this.app.fileManager.trashFile(file);
         trashed.push(path);
         journalEntries.push({ from: path, sizeBytes, mtime, headHash });
@@ -939,7 +940,7 @@ export default class AttachmentManagerPlugin extends Plugin {
         const mtime = file.stat.mtime;
         // Read BEFORE the trash: afterwards the file is somewhere we would have
         // to guess at, which is the whole problem this hash exists to remove.
-        const headHash = await this.hashFileHead(file);
+        const headHash = await this.maybeHashHead(file);
         await this.app.fileManager.trashFile(file);
         trashed.push(path);
         journalEntries.push({ from: path, sizeBytes, mtime, headHash });
@@ -1279,7 +1280,9 @@ export default class AttachmentManagerPlugin extends Plugin {
         // Hash only size-matching candidates: it is the decisive check, but it
         // reads bytes, so it is not worth paying for a file already excluded.
         const headHash =
-          stat.size === entry.sizeBytes && entry.headHash !== undefined
+          stat.size === entry.sizeBytes &&
+          entry.headHash !== undefined &&
+          stat.size <= HASH_MAX_BYTES
             ? await this.hashHead(adapter, path)
             : undefined;
         candidates.push({ path, size: stat.size, mtime: stat.mtime, headHash });
@@ -1353,8 +1356,16 @@ export default class AttachmentManagerPlugin extends Plugin {
     }
   }
 
-  /** Head hash of a vault file, for recording identity before a mutation. */
-  private async hashFileHead(file: TFile): Promise<string | undefined> {
+  /**
+   * Head hash of a vault file, when it is worth taking.
+   *
+   * Skipped entirely when history is off (the value would be discarded by
+   * `recordBatch` anyway) and above {@link HASH_MAX_BYTES}, because there is no
+   * ranged read — hashing 64 KB of a 4 GB video still reads 4 GB.
+   */
+  private async maybeHashHead(file: TFile): Promise<string | undefined> {
+    if (this.settings.journalLimit <= 0) return undefined;
+    if (file.stat.size > HASH_MAX_BYTES) return undefined;
     return this.hashHead(this.app.vault.adapter, file.path);
   }
 
@@ -1367,6 +1378,23 @@ export default class AttachmentManagerPlugin extends Plugin {
     } catch {
       /* may already exist, or be created concurrently */
     }
+  }
+
+  /**
+   * Retire a batch the user is finished with, without restoring the rest.
+   *
+   * Needed because a batch can be genuinely un-completable: a file emptied from
+   * `.trash`, or one whose content no longer matches what was recorded. Those
+   * entries will never succeed, so without this the card stays actionable
+   * forever and every click re-walks the trash to fail again.
+   */
+  async dismissBatch(batchId: string): Promise<void> {
+    this.settings.journal = replaceBatch(this.settings.journal, batchId, (b) => ({
+      ...b,
+      revertedAt: b.revertedAt ?? new Date().toISOString(),
+    }));
+    await this.saveSettings();
+    this.refreshViews();
   }
 
   async clearJournal(): Promise<void> {

@@ -82,9 +82,15 @@ function escapeRegExp(value: string): string {
  * touch it.
  */
 export function couldBeTrashedAs(candidateName: string, wantedName: string): boolean {
-  if (candidateName === wantedName) return true;
-  const wanted = splitName(wantedName);
-  const candidate = splitName(candidateName);
+  // Normalize HERE, not in the caller. This is called from two places — the
+  // adapter-facing pre-filter in main.ts and the selector below — and an earlier
+  // version normalized only in the selector, so the pre-filter discarded every
+  // NFD candidate before normalization could ever apply. The fix was inert on
+  // exactly the platform it was written for, and the tests passed because they
+  // exercised the selector rather than the shipped path.
+  const candidate = splitName(normalizeName(candidateName));
+  const wanted = splitName(normalizeName(wantedName));
+  if (candidate.stem === wanted.stem && candidate.ext === wanted.ext) return true;
   if (candidate.ext !== wanted.ext) return false;
   return new RegExp(`^${escapeRegExp(wanted.stem)}(?: \\d{1,2}| \\(\\d{1,2}\\))$`).test(
     candidate.stem
@@ -110,9 +116,7 @@ export function selectTrashCandidate(
 ): CandidateOutcome {
   const wantedName = normalizeName(baseName(target.from));
 
-  const byName = candidates.filter((c) =>
-    couldBeTrashedAs(normalizeName(baseName(c.path)), wantedName)
-  );
+  const byName = candidates.filter((c) => couldBeTrashedAs(baseName(c.path), wantedName));
   if (byName.length === 0) return { found: null, reason: "no-match" };
 
   // Gate 1 — size. Cheap, and a mismatch is decisive: this is not our file.
@@ -147,10 +151,11 @@ export function selectTrashCandidate(
     if (sameTime.length === 1) return { found: sameTime[0] };
   }
 
-  // If a content hash was recorded, everything still standing is byte-identical
-  // over its leading bytes AND the same size, so restoring any of them is
-  // equally correct. Without one there is no evidence left, and guessing would
-  // be a silent data swap.
+  // Everything still standing has the same size AND the same leading bytes. That
+  // is not a proof of byte-equality — two large files can share a preamble — but
+  // it is far stronger evidence than name alone, and the realistic case that
+  // reaches here is genuine duplicates, where restoring either is correct.
+  // Refusing instead would make duplicate cleanup unrestorable, which is worse.
   if (target.headHash !== undefined) return { found: pool[0] };
   return { found: null, reason: "ambiguous" };
 }
