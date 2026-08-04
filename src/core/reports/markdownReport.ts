@@ -50,10 +50,16 @@ export function buildMarkdownReport(input: ReportInput): string {
     lines.push(`## ${ISSUE_TYPE_LABELS[issueType]}`);
     for (const issue of group) {
       // Link by full path so attachments that share a basename resolve correctly.
-      const link = `- [[${issue.attachmentPath}]]`;
+      // A "missing" issue names a file that does NOT exist, so wikilinking it
+      // would add a fresh broken link to the vault — write it as code instead.
+      const label =
+        issue.exists === false
+          ? `- \`${issue.attachmentPath}\``
+          : `- [[${issue.attachmentPath}]]`;
       const why = issue.details ?? issue.reason;
-      const size = formatBytes(issue.sizeBytes);
-      lines.push(`${link} — ${why} (${size})`);
+      // Size is meaningless for a file that isn't there.
+      const size = issue.exists === false ? "" : ` (${formatBytes(issue.sizeBytes)})`;
+      lines.push(`${label} — ${why}${size}`);
     }
     lines.push("");
   }

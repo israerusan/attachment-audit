@@ -1,5 +1,6 @@
 import type { CustomRule, CustomRuleCondition, AttachmentStat } from "../../types";
 import { isOlderThanDays } from "../utils/dates";
+import { checkRegexSafety } from "./regexSafety";
 
 /** A custom rule that fired on an attachment: which rule, its weight, and why. */
 export interface CustomRuleHit {
@@ -30,16 +31,20 @@ export function ruleInScope(stat: AttachmentStat, scope: CustomRule["scope"]): b
   return true;
 }
 
-// Compile name-match patterns once; a malformed pattern is cached as null so it
-// is skipped without recompiling and never throws mid-scan.
+// Compile name-match patterns once; a malformed OR catastrophically-backtracking
+// pattern is cached as null so it is skipped without recompiling and can never
+// hang the scan. Screening happens here (not only in the settings UI) because a
+// rule can also arrive from a hand-edited data.json or an older version.
 const patternCache = new Map<string, RegExp | null>();
 function compilePattern(pattern: string): RegExp | null {
   if (patternCache.has(pattern)) return patternCache.get(pattern) ?? null;
   let re: RegExp | null = null;
-  try {
-    re = new RegExp(pattern, "i");
-  } catch {
-    re = null;
+  if (checkRegexSafety(pattern).safe) {
+    try {
+      re = new RegExp(pattern, "i");
+    } catch {
+      re = null;
+    }
   }
   patternCache.set(pattern, re);
   return re;

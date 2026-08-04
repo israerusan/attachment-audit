@@ -21,6 +21,14 @@ export function issueKeyPath(key: string): string {
   return i === -1 ? key : key.slice(0, i);
 }
 
+/** Recover the issue type from an issue key, or "" if the key is malformed. */
+export function issueKeyType(key: string): string {
+  const first = key.indexOf(ISSUE_KEY_SEP);
+  if (first === -1) return "";
+  const second = key.indexOf(ISSUE_KEY_SEP, first + 1);
+  return second === -1 ? key.slice(first + 1) : key.slice(first + 1, second);
+}
+
 /**
  * A short unique id for profiles and rules. Runs in the plugin runtime (not the
  * pure test path), so `crypto.randomUUID` / `Date.now` are available.

@@ -3,19 +3,26 @@
    light or dark, and to the user's interface-font size. */
 
 .attachment-audit-view {
-  padding: var(--size-4-3);
+  /* Container queries so the layout responds to the PANE width, not the window —
+     this view lives in a ~300px sidebar but users do drag it into the main area. */
+  container-type: inline-size;
+  container-name: aa;
+  padding: var(--size-4-3) var(--size-4-2);
   font-size: var(--font-ui-small);
 }
 
 /* Explicit keyboard focus ring — our custom buttons strip native chrome, so give
-   them a visible focus indicator that doesn't depend on theme cascade luck. */
+   them a visible focus indicator that doesn't depend on theme cascade luck.
+   `outline` rather than `box-shadow`: box-shadows are stripped entirely in
+   Windows High Contrast / forced-colors mode, which would leave no focus
+   indicator at all. */
 .attachment-audit-row-title:focus-visible,
 .attachment-audit-tile:focus-visible,
 .attachment-audit-icon-btn:focus-visible,
 .attachment-audit-inline-link:focus-visible,
 .attachment-audit-cta-dismiss:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+  outline: 2px solid var(--background-modifier-border-focus);
+  outline-offset: 1px;
   border-radius: var(--radius-s);
 }
 
@@ -27,10 +34,21 @@
   margin-bottom: var(--size-4-2);
 }
 
-.attachment-audit-header h2 {
-  margin: 0;
+/* The Run scan button leads the pane; the tab header already carries the title. */
+.attachment-audit-header > button.mod-cta {
   margin-right: auto;
-  font-size: var(--font-ui-large);
+}
+
+.attachment-audit-profile-select {
+  min-width: 0;
+  max-width: 100%;
+}
+
+@container aa (max-width: 340px) {
+  /* Below this the profile picker and the scan button fight for one line. */
+  .attachment-audit-profile-select {
+    flex-basis: 100%;
+  }
 }
 
 .attachment-audit-summary {
@@ -54,38 +72,120 @@
   background: var(--background-secondary);
 }
 
+/*
+  Narrow-pane layout. `flex-wrap` put every control on its own line: the toolbar
+  became three stacked rows and the bulk bar seven, which pushed the results
+  themselves below the fold in a ~300px sidebar.
+*/
+@container aa (max-width: 340px) {
+  .attachment-audit-toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--size-2-2);
+  }
+
+  .attachment-audit-toolbar .dropdown {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .attachment-audit-bulk-bar {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--size-2-2);
+    align-items: center;
+  }
+
+  .attachment-audit-bulk-bar > button {
+    width: 100%;
+  }
+
+  /* The selection count and trial note read as labels, not controls. */
+  .attachment-audit-bulk-bar > span {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Dragged into the main editor area, an unbounded row would strand its actions
+   a thousand pixels from its title. */
+@container aa (min-width: 700px) {
+  .attachment-audit-results,
+  .attachment-audit-meta,
+  .attachment-audit-toolbar {
+    max-width: 46em;
+  }
+}
+
 /* Results list */
 
 .attachment-audit-results {
   display: flex;
   flex-direction: column;
-  gap: var(--size-2-2);
+  gap: 1px;
 }
 
+/*
+  The row is a grid, not a flex line. As a flex line every element competed for
+  one horizontal track and the FILENAME lost: at a 300px sidebar the severity
+  chip, type badge and four action buttons consumed ~195px of ~260px, leaving the
+  title about five characters. The grid gives the title a full row of its own and
+  lets the actions overlay the meta line on hover.
+
+  Native Obsidian lists (backlinks, search, outline) are borderless, so the
+  per-row box is dropped too — it read as "homemade form", not "Obsidian pane".
+*/
 .attachment-audit-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 3px auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "sev thumb title actions"
+    "sev thumb meta  meta";
   align-items: center;
-  gap: var(--size-4-2);
-  padding: var(--size-2-3) var(--size-4-2);
-  border: 1px solid var(--background-modifier-border);
+  column-gap: var(--size-4-2);
+  row-gap: 1px;
+  padding: var(--size-2-3) var(--size-4-1) var(--size-2-3) 0;
+  border: none;
   border-radius: var(--radius-s);
-  background: var(--background-primary);
+  background: transparent;
+  transition: background-color 80ms ease;
 }
 
 .attachment-audit-row:hover {
   background: var(--background-modifier-hover);
 }
 
-.attachment-audit-row.is-reviewed {
-  opacity: 0.55;
+.attachment-audit-row:active {
+  background: var(--background-modifier-active-hover);
+}
+
+/* A reviewed row stays legible: 0.55 opacity dropped the already-muted meta text
+   to roughly 2:1 contrast, and dimmed the focus ring of its own buttons too. */
+.attachment-audit-row.is-reviewed .attachment-audit-row-title {
+  color: var(--text-muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--text-faint);
+}
+
+.attachment-audit-row.is-reviewed .attachment-audit-sev {
+  opacity: 0.35;
+}
+
+.attachment-audit-check {
+  grid-area: thumb;
+  flex-shrink: 0;
+  margin: 0;
 }
 
 .attachment-audit-row-main {
+  display: contents;
+}
+
+.attachment-audit-row-titlerow {
+  grid-area: title;
   display: flex;
-  flex-direction: column;
-  gap: var(--size-2-1);
+  align-items: baseline;
+  gap: var(--size-4-1);
   min-width: 0;
-  flex: 1;
 }
 
 .attachment-audit-row-title {
@@ -104,7 +204,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  width: 100%;
+  min-width: 0;
+  flex: 1;
 }
 
 .attachment-audit-row-title:hover {
@@ -112,17 +213,123 @@
   text-decoration: underline;
 }
 
-.attachment-audit-row-reason {
+/* One meta line replaces the old title / folder / reason stack, which put the
+   least important line in the middle at a third font size. */
+.attachment-audit-row-meta {
+  grid-area: meta;
   color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.attachment-audit-sev-word {
+  font-weight: var(--font-semibold);
+}
+
+.attachment-audit-sev-word.is-high {
+  color: var(--color-red);
+}
+
+.attachment-audit-sev-word.is-med {
+  color: var(--color-orange);
+}
+
+/* Actions stay in the DOM and stay focusable — they just stop consuming ~94px of
+   a ~260px row at rest. focus-within keeps them usable by keyboard. */
+.attachment-audit-row-actions {
+  grid-area: actions;
+  display: flex;
+  gap: var(--size-2-1);
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 80ms ease;
+}
+
+.attachment-audit-row:hover .attachment-audit-row-actions,
+.attachment-audit-row:focus-within .attachment-audit-row-actions {
+  opacity: 1;
+}
+
+/* Touch devices have no hover, so never hide the actions there. */
+@media (hover: none) {
+  .attachment-audit-row-actions {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .attachment-audit-row,
+  .attachment-audit-row-actions {
+    transition: none;
+  }
+}
+
+/* Inline preview. `Pasted image 20260101.png` tells the user nothing — which is
+   exactly why the `unnamed` detector exists — and the UI then asks them to make
+   an irreversible decision from that name alone. */
+.attachment-audit-thumb {
+  grid-area: thumb;
+  width: 32px;
+  height: 32px;
+  object-fit: cover;
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+  /* Inset ring rather than a border, so transparent PNGs still read as an image
+     in both themes without shifting the grid. */
+  box-shadow: inset 0 0 0 1px var(--background-modifier-border);
+}
+
+.attachment-audit-thumb.is-file,
+.attachment-audit-thumb.is-missing {
+  display: grid;
+  place-items: center;
+  color: var(--text-faint);
+}
+
+.attachment-audit-thumb.is-missing {
+  color: var(--color-red);
+}
+
+/* Duplicate clusters: five byte-identical copies rendered as five independent
+   rows gave no way to see WHICH rows "keep one copy" was about. */
+.attachment-audit-cluster {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  overflow: hidden;
+  margin: var(--size-2-2) 0;
+}
+
+.attachment-audit-cluster-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--size-4-2);
+  padding: var(--size-2-2) var(--size-4-2);
+  background: var(--background-secondary);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.attachment-audit-cluster-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.attachment-audit-row-actions {
-  display: flex;
-  gap: var(--size-2-1);
+.attachment-audit-cluster-waste {
   flex-shrink: 0;
+  font-weight: var(--font-semibold);
+}
+
+.attachment-audit-cluster-body {
+  padding-left: var(--size-4-2);
+}
+
+.attachment-audit-cluster-body .attachment-audit-row + .attachment-audit-row {
+  border-top: 1px solid var(--background-modifier-border);
 }
 
 .attachment-audit-icon-btn {
@@ -144,13 +351,15 @@
   color: var(--text-normal);
 }
 
-/* The destructive "ignore" action is set apart (gap + a faint danger tint at rest)
-   and turns solid danger on hover, so it never reads like the benign reviewed
-   toggle right next to it. */
+/*
+  Danger styling is now spent on exactly ONE action: trash. It previously applied
+  to both trash and ignore — two adjacent identical red icons, where ignore is
+  fully reversible (it even offers undo) and trash moves a file. Spending the same
+  red on both trains the user to stop seeing it.
+*/
 .attachment-audit-icon-btn.is-danger {
-  margin-left: var(--size-4-1);
   color: var(--text-error);
-  opacity: 0.75;
+  opacity: 0.8;
 }
 
 .attachment-audit-icon-btn.is-danger:hover {
@@ -178,10 +387,38 @@
   text-overflow: ellipsis;
 }
 
+/* Empty state. The old version was one muted line, identical whether the vault
+   was clean or the user had filtered to a category with nothing in it — and in
+   the second case there was no way back. */
 .attachment-audit-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--size-2-2);
   color: var(--text-muted);
-  padding: var(--size-4-4) 0;
+  padding: var(--size-4-6) var(--size-4-2);
   text-align: center;
+}
+
+.attachment-audit-empty-icon {
+  display: inline-flex;
+  color: var(--color-green);
+}
+
+.attachment-audit-empty-icon .svg-icon {
+  width: 28px;
+  height: 28px;
+}
+
+.attachment-audit-empty-title {
+  font-weight: var(--font-semibold);
+  color: var(--text-normal);
+}
+
+.attachment-audit-empty-hint {
+  font-size: var(--font-ui-smaller);
+  max-width: 28em;
+  line-height: var(--line-height-normal);
 }
 
 /* Pro surfaces */
@@ -200,9 +437,14 @@
   opacity: 0.9;
 }
 
+/* Single definition — this selector used to be declared twice, ~300 lines apart. */
 .attachment-audit-pro-cta {
+  position: relative;
   margin-top: var(--size-4-4);
   padding: var(--size-4-3);
+  /* Room for the absolutely-positioned dismiss button, which otherwise overlapped
+     the headline as soon as it wrapped in a narrow pane. */
+  padding-right: var(--size-4-6);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-m);
   background: var(--background-secondary);
@@ -247,10 +489,27 @@ a.attachment-audit-cta-link:hover {
   margin: 0 0 var(--size-2-2);
 }
 
-.attachment-audit-onboarding-blurb {
+/* Three scannable promises rather than one 45-word sentence. */
+.attachment-audit-onboarding-points {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-2-3);
+  margin-bottom: var(--size-4-3);
+}
+
+.attachment-audit-onboarding-point {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--size-4-2);
   color: var(--text-muted);
-  margin-bottom: var(--size-2-3);
   line-height: var(--line-height-normal);
+}
+
+.attachment-audit-onboarding-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--interactive-accent);
 }
 
 .attachment-audit-onboarding-hint {
@@ -276,17 +535,42 @@ a.attachment-audit-cta-link:hover {
   transition: width 0.15s ease;
 }
 
+/* Before the attachment total is known there is no honest percentage to show —
+   a 0%-wide bar reads as "hung", a moving one as "working". */
+.attachment-audit-progress-bar.is-indeterminate {
+  width: 35%;
+  animation: attachment-audit-slide 1.1s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .attachment-audit-progress-bar {
     transition: none;
   }
+
+  .attachment-audit-progress-bar.is-indeterminate {
+    animation: none;
+    width: 100%;
+    opacity: 0.5;
+  }
 }
 
-/* Contextual "add required properties" nudge */
+/* Contextual nudge / inline settings feedback */
 .attachment-audit-nudge {
   margin-top: var(--size-4-2);
-  color: var(--text-faint);
+  color: var(--text-muted);
   font-size: var(--font-ui-smaller);
+}
+
+.attachment-audit-nudge.attachment-audit-warning {
+  padding: var(--size-2-2) var(--size-4-2);
+  border-radius: var(--radius-s);
+  border: 1px solid color-mix(in srgb, var(--color-orange) 35%, transparent);
+  background: color-mix(in srgb, var(--color-orange) 10%, var(--background-primary));
+  color: var(--text-normal);
+}
+
+.attachment-audit-nudge:empty {
+  display: none;
 }
 
 /* Pro upsell modal */
@@ -340,10 +624,15 @@ a.attachment-audit-cta-link:hover {
   color: var(--text-muted);
 }
 
+/*
+  Filter pills, not stat cards. Stacked count-over-label tiles wrapped to three
+  rows of ~150px in a narrow pane — with the toolbar and legend that put the first
+  result ~350px down. Side-by-side halves the height.
+*/
 .attachment-audit-tiles {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--size-2-2);
+  gap: var(--size-2-1);
   margin-top: var(--size-4-2);
 }
 
@@ -351,15 +640,19 @@ a.attachment-audit-cta-link:hover {
   appearance: none;
   box-shadow: none;
   font: inherit;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  min-width: 4.5em;
-  padding: var(--size-2-2) var(--size-4-2);
+  display: inline-flex;
+  flex-direction: row;
+  align-items: baseline;
+  gap: var(--size-2-2);
+  min-width: 0;
+  height: auto;
+  padding: 1px var(--size-4-2);
   border: 1px solid var(--background-modifier-border);
-  border-radius: var(--radius-s);
+  /* Pill radius reads as a filter chip; a small radius read as a card. */
+  border-radius: var(--radius-l);
   background: var(--background-secondary);
   cursor: pointer;
+  transition: background-color 80ms ease;
 }
 
 button.attachment-audit-tile:hover {
@@ -370,14 +663,21 @@ button.attachment-audit-tile:hover {
   cursor: default;
 }
 
+/* A 1px border tint could not read as "this filter is ON" against six neighbours,
+   especially since it shared the hover background. Fill it instead. */
 .attachment-audit-tile.is-active {
   border-color: var(--interactive-accent);
-  background: var(--background-modifier-hover);
+  background: var(--interactive-accent);
+}
+
+.attachment-audit-tile.is-active .attachment-audit-tile-count,
+.attachment-audit-tile.is-active .attachment-audit-tile-label {
+  color: var(--text-on-accent);
 }
 
 .attachment-audit-tile-count {
-  font-size: var(--font-ui-large);
-  font-weight: var(--font-semibold);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-bold);
   color: var(--text-normal);
 }
 
@@ -387,34 +687,36 @@ button.attachment-audit-tile:hover {
   white-space: nowrap;
 }
 
-/* Severity tier chip (letter + color, so it's legible without relying on hue) */
+@media (prefers-reduced-motion: reduce) {
+  .attachment-audit-tile {
+    transition: none;
+  }
+}
 
+/*
+  Severity rail. Previously a 1.3em lettered chip with HARDCODED #fff / #1a1a1a
+  labels — the only two hardcoded colours in this file. White on the light theme's
+  --color-red is ~4.05:1 (a fail at that weight), and community themes redefine
+  --color-* freely, so a pastel palette made the letter unreadable. As a 3px rail
+  there is no text to contrast, and the severity WORD now appears in the meta line,
+  which is what keeps the tier from depending on hue alone (WCAG 1.4.1).
+*/
 .attachment-audit-sev {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.3em;
-  height: 1.3em;
+  grid-area: sev;
+  align-self: stretch;
+  width: 3px;
+  min-height: 100%;
   border-radius: var(--radius-s);
-  font-size: var(--font-ui-smaller);
-  font-weight: var(--font-bold);
-  /* Saturated fill with a contrast-correct label (dark on the light orange, light
-     on the dark red). The H/M/L letter is the non-color channel, so the tier still
-     reads without relying on hue. --color-* are saturated in both light and dark. */
-  color: #fff;
+  background: var(--background-modifier-border);
 }
 
 .attachment-audit-sev.is-high { background: var(--color-red); }
-.attachment-audit-sev.is-med { background: var(--color-orange); color: #1a1a1a; }
-.attachment-audit-sev.is-low { background: var(--background-modifier-border); color: var(--text-normal); }
+.attachment-audit-sev.is-med { background: var(--color-orange); }
 
+/* The folder path is the DISAMBIGUATOR between two identically-named pastes, so
+   it gets --text-muted rather than --text-faint (~2.8:1 at 12px in light theme). */
 .attachment-audit-row-folder {
-  color: var(--text-faint);
-  font-size: var(--font-ui-smaller);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  color: var(--text-muted);
 }
 
 .attachment-audit-review-legend {
@@ -435,8 +737,10 @@ button.attachment-audit-tile:hover {
   text-decoration: underline;
 }
 
+/* --color-green rather than --text-success: the latter is ~2.6:1 in the light
+   theme, below even the 3:1 an icon needs. */
 .attachment-audit-icon-btn.is-active {
-  color: var(--text-success);
+  color: var(--color-green);
 }
 
 /* Review queue modal */
@@ -453,9 +757,27 @@ button.attachment-audit-tile:hover {
   margin-top: var(--size-2-2);
 }
 
+/* A tinted pill rather than green text — same contrast problem as the banner. */
 .attachment-audit-reviewed-tag {
-  color: var(--text-success);
+  padding: 0 var(--size-4-1);
+  border-radius: var(--radius-s);
+  background: color-mix(in srgb, var(--color-green) 18%, var(--background-primary));
+  color: var(--text-normal);
   font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+}
+
+/* A long unbroken filename (`Screenshot_2026-01-14_at_10.22.33_AM_FINAL.png`) is
+   one untokenizable word and would otherwise blow out the modal's width. */
+.attachment-audit-review-title,
+.attachment-audit-review-path,
+.attachment-audit-review-reason,
+.attachment-audit-confirm-body {
+  overflow-wrap: anywhere;
+}
+
+.attachment-audit-review-modal {
+  max-width: 32em;
 }
 
 .attachment-audit-review-title {
@@ -498,10 +820,6 @@ button.attachment-audit-tile:hover {
   margin-top: var(--size-2-2);
 }
 
-.attachment-audit-pro-cta {
-  position: relative;
-}
-
 .attachment-audit-cta-dismiss {
   appearance: none;
   border: none;
@@ -521,11 +839,153 @@ button.attachment-audit-tile:hover {
   color: var(--text-accent);
 }
 
-/* Reclaimable-space banner — the headline metric, given prominence. */
+/*
+  Reclaimable-space banner — the headline metric.
+
+  It used to be `color: var(--text-success)` on the primary background, which is
+  about 2.6:1 in the light theme: the single most important number in the plugin
+  was its least readable string. The semantics now live in a tinted SURFACE, so
+  the text itself can be --text-normal and pass in both themes.
+*/
 .attachment-audit-reclaim {
-  margin-top: var(--size-2-2);
+  display: flex;
+  align-items: center;
+  gap: var(--size-2-2);
+  margin: var(--size-4-2) 0;
+  padding: var(--size-2-3) var(--size-4-2);
+  border-radius: var(--radius-m);
+  border: 1px solid color-mix(in srgb, var(--color-green) 30%, var(--background-modifier-border));
+  background: color-mix(in srgb, var(--color-green) 10%, var(--background-primary));
+  color: var(--text-normal);
   font-weight: var(--font-semibold);
-  color: var(--text-success);
+}
+
+/* A Lucide icon, not the `♻` glyph: that renders as a monochrome dingbat on
+   Windows and a colour emoji on macOS — a different plugin on each OS. */
+.attachment-audit-reclaim-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--color-green);
+}
+
+/* Scan failure. A dashboard whose job is deciding what to delete must never
+   present stale results as current. */
+.attachment-audit-error {
+  margin-bottom: var(--size-4-3);
+  padding: var(--size-4-2);
+  border-radius: var(--radius-m);
+  border: 1px solid color-mix(in srgb, var(--color-red) 35%, var(--background-modifier-border));
+  background: color-mix(in srgb, var(--color-red) 8%, var(--background-primary));
+}
+
+.attachment-audit-error-head {
+  display: flex;
+  align-items: center;
+  gap: var(--size-2-2);
+  font-weight: var(--font-semibold);
+  margin-bottom: var(--size-2-2);
+}
+
+.attachment-audit-error-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--color-red);
+}
+
+.attachment-audit-error-body {
+  color: var(--text-muted);
+  margin-bottom: var(--size-4-2);
+  line-height: var(--line-height-normal);
+}
+
+/* Scanning state: a title, an indeterminate bar until the total is known, and
+   skeleton rows so the pane reads as "working" rather than "empty". */
+.attachment-audit-scanning-title {
+  font-weight: var(--font-semibold);
+  margin-bottom: var(--size-2-2);
+}
+
+.attachment-audit-skeletons {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-2-2);
+  margin-top: var(--size-4-3);
+}
+
+.attachment-audit-skeleton {
+  height: 40px;
+  border-radius: var(--radius-s);
+  background: linear-gradient(
+    90deg,
+    var(--background-secondary) 25%,
+    var(--background-modifier-hover) 37%,
+    var(--background-secondary) 63%
+  );
+  background-size: 400% 100%;
+  animation: attachment-audit-shimmer 1.4s ease infinite;
+}
+
+@keyframes attachment-audit-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: 0 0; }
+}
+
+@keyframes attachment-audit-slide {
+  from { margin-left: -35%; }
+  to { margin-left: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .attachment-audit-skeleton {
+    animation: none;
+  }
+}
+
+/* Destructive-confirm dialog. The danger used to live ONLY in the confirm
+   button's warning styling — the last 90px of a dialog otherwise identical to a
+   benign prompt. */
+.attachment-audit-confirm-modal .modal-title {
+  color: var(--text-error);
+}
+
+.attachment-audit-confirm-callout {
+  display: flex;
+  gap: var(--size-4-2);
+  padding: var(--size-4-2);
+  margin-bottom: var(--size-4-3);
+  border-radius: var(--radius-m);
+  border: 1px solid color-mix(in srgb, var(--color-red) 35%, transparent);
+  background: color-mix(in srgb, var(--color-red) 10%, var(--background-primary));
+}
+
+.attachment-audit-confirm-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--color-red);
+}
+
+/* The exact paths about to be touched: "Move 14 file(s) to trash" gave the user
+   no way to spot the one they didn't mean to select. */
+.attachment-audit-confirm-files {
+  max-height: 11em;
+  overflow-y: auto;
+  margin-bottom: var(--size-4-3);
+  padding: var(--size-4-2);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.attachment-audit-confirm-file {
+  overflow-wrap: anywhere;
+}
+
+.attachment-audit-confirm-more {
+  margin-top: var(--size-2-2);
+  font-style: italic;
 }
 
 /* Free-trial hint in the bulk bar */

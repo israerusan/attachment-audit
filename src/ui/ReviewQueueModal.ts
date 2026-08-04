@@ -40,6 +40,47 @@ export class ReviewQueueModal extends Modal {
     this.scope.register([], "i", () => void this.ignoreCurrent());
     this.scope.register([], "e", () => void this.excludeCurrent());
     this.scope.register([], "o", () => void this.openCurrent());
+    this.scope.register([], "t", () => this.trashCurrent());
+    this.scope.register([], "m", () => this.moveCurrent());
+  }
+
+  /** Trash the current attachment — only ever offered for two-signal unused files. */
+  private trashCurrent(): void {
+    const issue = this.current();
+    if (!issue || issue.issueType !== "unused") return;
+    this.plugin.confirmDestructive(
+      "Trash unused attachment",
+      `No note links to or mentions "${issue.attachmentName}", so removing it won't break anything. ` +
+        `Move it to trash, freeing ${formatBytes(issue.sizeBytes)}? ${this.plugin.trashDestinationNote()}`,
+      "Trash file",
+      () =>
+        void this.plugin.bulkTrashUnused([issue], true).then((changed) => {
+          if (changed.length) {
+            this.plugin.handleTrashed(changed);
+            this.dropIssue(issue);
+          }
+        }),
+      [issue.attachmentPath]
+    );
+  }
+
+  private moveCurrent(): void {
+    const issue = this.current();
+    if (!issue || issue.exists === false) return;
+    if (!this.plugin.settings.attachmentFolder.trim()) return;
+    this.plugin.confirmDestructive(
+      "Move to attachment folder",
+      this.plugin.describeMoveAction(1),
+      "Move file",
+      () =>
+        void this.plugin.bulkMoveToAttachmentFolder([issue]).then((changed) => {
+          if (changed.length) {
+            this.dropIssue(issue);
+            void this.plugin.settleCacheThenRescan(changed);
+          }
+        }),
+      [issue.attachmentPath]
+    );
   }
 
   private current(): AttachmentIssue | null {
@@ -91,12 +132,26 @@ export class ReviewQueueModal extends Modal {
       this.plugin.isReviewed(issue) ? "Mark not reviewed (r)" : "Mark reviewed (r)",
       () => void this.toggleReviewed()
     );
+
+    // Trash and Move were missing entirely, so a user working the queue had to
+    // abandon it, find the row in the sidebar, and act there — for the two actions
+    // the whole plugin exists to perform.
+    if (issue.issueType === "unused") {
+      const trash = this.actionButton(actions, "trash-2", "Trash file (t)", () =>
+        this.trashCurrent()
+      );
+      trash.addClass("mod-warning");
+    }
+    if (this.plugin.settings.attachmentFolder.trim() && issue.exists !== false) {
+      this.actionButton(actions, "folder-input", "Move to folder (m)", () => this.moveCurrent());
+    }
+
     this.actionButton(actions, "eye-off", "Ignore (i)", () => void this.ignoreCurrent());
     this.actionButton(actions, "ban", "Exclude (e)", () => void this.excludeCurrent());
 
     contentEl.createDiv({
       cls: "attachment-audit-review-legend",
-      text: "← → navigate · r review · i ignore · e exclude · o open",
+      text: "← → navigate · r review · t trash · m move · i ignore · e exclude · o open",
     });
 
     const nav = contentEl.createDiv({ cls: "attachment-audit-review-nav" });
@@ -113,13 +168,15 @@ export class ReviewQueueModal extends Modal {
     icon: string,
     tooltip: string,
     onClick: () => void
-  ): void {
+  ): HTMLButtonElement {
     const btn = parent.createEl("button", { cls: "attachment-audit-review-action" });
     const iconEl = btn.createSpan();
     setIcon(iconEl, icon);
     btn.createSpan({ text: tooltip });
-    btn.setAttribute("aria-label", tooltip);
+    // The visible label already IS the accessible name; an aria-label duplicating
+    // it would only risk drifting from it.
     btn.addEventListener("click", onClick);
+    return btn;
   }
 
   private async openCurrent(): Promise<void> {

@@ -15,13 +15,23 @@ export function duplicateDetector(
   const paths = hashToPaths.get(stat.hash);
   if (!paths || paths.length < 2) return null;
 
-  const others = paths.filter((p) => p !== stat.path);
-  if (others.length === 0) return null;
+  // Count and sample in ONE allocation-free pass. This runs once per cluster
+  // member, so the old `paths.filter(...)` allocated a (k-1)-element array per
+  // member — O(k^2) pointers of garbage. A pathological cluster is easy to
+  // produce (thousands of zero-byte files from a broken sync share one hash),
+  // and only the count plus the first 5 names are ever used.
+  let count = 0;
+  const sample: string[] = [];
+  for (let i = 0; i < paths.length; i++) {
+    if (paths[i] === stat.path) continue;
+    count++;
+    if (sample.length < 5) sample.push(paths[i]);
+  }
+  if (count === 0) return null;
 
-  const shown = others.slice(0, 5).join(", ");
-  const more = others.length > 5 ? `, +${others.length - 5} more` : "";
+  const more = count > sample.length ? `, +${count - sample.length} more` : "";
   return {
-    reason: `Identical to ${others.length} other file${others.length === 1 ? "" : "s"}`,
-    details: `Same content as: ${shown}${more}`,
+    reason: `Identical to ${count} other file${count === 1 ? "" : "s"}`,
+    details: `Same content as: ${sample.join(", ")}${more}`,
   };
 }

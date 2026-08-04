@@ -131,10 +131,17 @@ export class ProfileEditModal extends Modal {
   }
 }
 
+/** Largest threshold accepted, in KB (64 TB) — matches the load-time clamp. */
+const MAX_THRESHOLD_KB = 1024 * 1024 * 64;
+
 /** Parse an optional MB override into KB; blank/invalid yields undefined (use global). */
 function toMbKb(value: string): number | undefined {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
   const n = Number.parseFloat(trimmed);
-  return Number.isNaN(n) ? undefined : Math.round(n * 1024);
+  if (!Number.isFinite(n)) return undefined;
+  // Clamped here as well as on load: an absurd value entered in this modal would
+  // otherwise sit in the live profile for the session and silently stop the
+  // `large` detector from ever firing for scans that use it.
+  return Math.min(MAX_THRESHOLD_KB, Math.max(0, Math.round(n * 1024)));
 }

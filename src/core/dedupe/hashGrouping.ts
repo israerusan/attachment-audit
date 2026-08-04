@@ -16,8 +16,15 @@ export interface SizedFile {
  */
 export function sizeCollisionCandidates<T extends SizedFile>(files: T[]): T[] {
   const counts = new Map<number, number>();
-  for (const f of files) counts.set(f.size, (counts.get(f.size) ?? 0) + 1);
-  return files.filter((f) => (counts.get(f.size) ?? 0) >= 2);
+  for (const f of files) {
+    // Empty files are excluded outright. Every zero-byte file shares the SHA-256
+    // of the empty string, so a folder of failed downloads (.png, .pdf, .zip)
+    // would form ONE cluster reported as "identical" — and "trash duplicate
+    // copies" would then delete hundreds of unrelated files to reclaim 0 bytes.
+    if (f.size <= 0) continue;
+    counts.set(f.size, (counts.get(f.size) ?? 0) + 1);
+  }
+  return files.filter((f) => f.size > 0 && (counts.get(f.size) ?? 0) >= 2);
 }
 
 /**

@@ -15,12 +15,20 @@ import type { AttachmentIssue } from "../../types";
  *  - at least one copy of every cluster always survives (never trash the last copy);
  *  - unselected copies are never trashed (selection scope is respected);
  *  - keep-one is applied per cluster, independently.
+ *
+ * `stillExists` decides survivor membership against the FILESYSTEM rather than
+ * against the last scan. Without it, "at least one copy survives" rested entirely
+ * on the vault's delete event having fired and pruned `allIssues` — a copy deleted
+ * outside Obsidian, or an event missed during a sync, would leave a phantom
+ * survivor in the list and let the real last copy be trashed. Omit it and the
+ * behaviour falls back to trusting the scan (used by the pure tests).
  */
 export function selectDuplicateCopiesToTrash(
   selected: readonly AttachmentIssue[],
   allIssues: readonly AttachmentIssue[],
   unused: ReadonlySet<string>,
-  inbound: ReadonlyMap<string, number>
+  inbound: ReadonlyMap<string, number>,
+  stillExists?: (path: string) => boolean
 ): string[] {
   const membersByCluster = new Map<string, string[]>();
   for (const i of allIssues) {
@@ -43,8 +51,13 @@ export function selectDuplicateCopiesToTrash(
   for (const [cid, sel] of selectedByCluster) {
     const members = membersByCluster.get(cid) ?? sel;
     // Eligible = selected copies that are two-signal unused AND still unreferenced.
-    const eligible = sel.filter((p) => unused.has(p) && (inbound.get(p) ?? 0) <= 0);
-    const survivors = members.filter((p) => !eligible.includes(p));
+    const eligible = sel.filter(
+      (p) => unused.has(p) && (inbound.get(p) ?? 0) <= 0 && (stillExists?.(p) ?? true)
+    );
+    // A survivor only counts if the file is actually still on disk.
+    const survivors = members.filter(
+      (p) => !eligible.includes(p) && (stillExists?.(p) ?? true)
+    );
     let trashList = eligible;
     // Never remove the last surviving copy of the content.
     if (survivors.length === 0 && trashList.length > 0) trashList = trashList.slice(1);

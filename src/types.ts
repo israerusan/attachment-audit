@@ -9,6 +9,7 @@ export type IssueType =
   | "large"
   | "unnamed"
   | "misplaced"
+  | "missing"
   | "custom";
 
 export const ISSUE_TYPES: IssueType[] = [
@@ -17,6 +18,7 @@ export const ISSUE_TYPES: IssueType[] = [
   "large",
   "unnamed",
   "misplaced",
+  "missing",
   "custom",
 ];
 
@@ -27,6 +29,7 @@ export const ISSUE_TYPE_LABELS: Record<IssueType, string> = {
   large: "Large files",
   unnamed: "Poorly named",
   misplaced: "Misplaced",
+  missing: "Broken links",
   custom: "Custom rules",
 };
 
@@ -90,6 +93,16 @@ export interface AttachmentIssue {
   clusterId?: string;
   /** Set for issues produced by a custom rule. */
   sourceRuleId?: string;
+  /**
+   * False when `attachmentPath` names a file that does NOT exist — currently only
+   * "missing" (broken link) issues. Every other consumer assumes the path resolves,
+   * so this flag guards the places that would otherwise misbehave: `pruneKeys`
+   * would silently drop the user's ignore state on every scan, and reclaimable-space
+   * math would count bytes that aren't there.
+   */
+  exists?: boolean;
+  /** For "missing": the notes whose links point at the absent file. */
+  referencedBy?: string[];
 }
 
 // --- Settings ---------------------------------------------------------------
@@ -171,6 +184,9 @@ export interface AttachmentManagerSettings {
 
   /** Persisted dashboard sort, so a plain re-scan keeps the user's choice. */
   sortMode: SortMode;
+
+  /** Show inline image previews in the results list. */
+  showThumbnails: boolean;
 
   savedProfiles: ScanProfile[];
   customRules: CustomRule[];

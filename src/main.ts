@@ -5,7 +5,9 @@ import {
   Notice,
   Platform,
   Plugin,
+  type TAbstractFile,
   TFile,
+  TFolder,
   WorkspaceLeaf,
   normalizePath,
 } from "obsidian";
@@ -25,14 +27,19 @@ import {
   resolveScanConfig,
   buildInboundCounts,
   findMentionedAttachments,
+  isMentionSourcePath,
+  ScanAbortedError,
+  type ScanPhase,
 } from "./core/scan/scanVault";
 import { countByType } from "./core/rules/severity";
 import { computeReclaim } from "./core/reclaim/reclaimableSpace";
 import { selectDuplicateCopiesToTrash } from "./core/dedupe/duplicateTrashSelection";
 import { buildMarkdownReport } from "./core/reports/markdownReport";
-import { issueKey, issueKeyPath } from "./core/utils/ids";
+import { issueKey, issueKeyPath, issueKeyType } from "./core/utils/ids";
 import { formatBytes } from "./core/utils/sizes";
 import { moveTargetPath, uniquePath, dirName, splitExtension, joinPath } from "./core/paths/pathRewrite";
+import { sanitizeBaseName } from "./core/naming/sanitizeName";
+import { migrateRawSettings, normalizeSettings, SCHEMA_VERSION } from "./core/settings/normalize";
 import { LicenseManager } from "./core/license/LicenseManager";
 import { requirePro } from "./ui/pro/ProGate";
 import { ProUpsellModal } from "./ui/pro/ProUpsellModal";
@@ -64,10 +71,19 @@ export default class AttachmentManagerPlugin extends Plugin {
   /** The most recent scan, held in memory for the dashboard and export. */
   lastResult: ScanRun | null = null;
 
+  /**
+   * Why the last scan failed, if it did. A dashboard whose job is deciding what to
+   * delete must never present stale results as current, so the view surfaces this
+   * instead of silently showing the previous run.
+   */
+  lastScanError: string | null = null;
+
   /** In-flight scan state, so the UI can show progress and block re-entry. */
   scanning = false;
   scanDone = 0;
   scanTotal = 0;
+  /** Which stage the running scan is in, so the UI can name it. */
+  scanPhase: ScanPhase = "collect";
 
   /** O(1) mirrors of the ignored/reviewed key arrays (rebuilt on load/mutation). */
   private ignoredSet = new Set<string>();
@@ -82,6 +98,10 @@ export default class AttachmentManagerPlugin extends Plugin {
   private refreshTimer: number | null = null;
   private rescanQueued = false;
   private queuedProfileId?: string;
+  /** Set on unload so an in-flight scan stops instead of writing settings afterwards. */
+  private unloaded = false;
+  /** Cleared on finishSettle so the settle floor timer can't outlive its wait. */
+  private settleFloorTimer: number | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -119,10 +139,39 @@ export default class AttachmentManagerPlugin extends Plugin {
       callback: () => this.exportReportCommand(),
     });
 
+    // Source-change tracking for the incremental live safety re-check. These
+    // events are authoritative in a way file mtimes are not: a sync client writes
+    // remote files with their ORIGINAL timestamp, so a note that gained an
+    // `<img src>` on another device arrives looking older than the local scan —
+    // but Obsidian still fires `modify` for it.
+    this.registerEvent(
+      this.app.vault.on("modify", (file) => this.noteSourceChanged(file.path))
+    );
+    this.registerEvent(
+      this.app.vault.on("create", (file) => this.noteSourceChanged(file.path))
+    );
+
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
         if (this.migratePath(oldPath, file.path)) this.scheduleSave();
-        if (this.remapLastResult(oldPath, file.path)) this.scheduleRefresh();
+        const remapped = this.remapLastResult(oldPath, file.path);
+        if (remapped) this.scheduleRefresh();
+        this.noteSourceChanged(file.path);
+        // ALWAYS force a full re-check after a rename. Two distinct holes close here:
+        //
+        //  - A FOLDER rename fires ONE event, not one per descendant, so every
+        //    basis entry beneath it silently becomes a path that no longer exists
+        //    and is never re-read. (`migratePath` and `remapLastResult` both handle
+        //    that case with a `startsWith(oldPath + "/")` prefix test; this one
+        //    can't, because the basis holds source paths, not attachment paths.)
+        //  - A file rename can make a path "unused" that the mention pass never
+        //    evaluated under that name: renaming `Pasted image 1.png` to `hero.png`
+        //    inherits the old row's unused verdict, while a note may have
+        //    referenced `hero.png` all along via a dangling HTML embed.
+        //
+        // Renames are rare and the cost is one full re-read on the next destructive
+        // action, so this is not worth being clever about.
+        this.invalidateMentionBasis();
       })
     );
     this.registerEvent(
@@ -136,27 +185,39 @@ export default class AttachmentManagerPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    const data = (await this.loadData()) as Partial<AttachmentManagerSettings> | null;
-    this.settings = Object.assign(safeClone(DEFAULT_SETTINGS), data);
-    this.settings.severityWeights = {
-      ...DEFAULT_SETTINGS.severityWeights,
-      ...(this.settings.severityWeights ?? {}),
-    };
-    for (const key of [
-      "junkNamePatterns",
-      "attachmentExtensions",
-      "excludedFolders",
-      "excludedPaths",
-      "ignoredIssueKeys",
-      "reviewedIssueKeys",
-      "savedProfiles",
-      "customRules",
-    ] as const) {
-      if (!Array.isArray(this.settings[key])) {
-        (this.settings as unknown as Record<string, unknown>)[key] = [];
-      }
+    // A truncated data.json (crash mid-write, sync conflict) must not stop the
+    // plugin from loading — fall back to defaults rather than failing onload.
+    let stored: unknown = null;
+    try {
+      stored = await this.loadData();
+    } catch (err) {
+      console.error("Attachment Audit: could not read settings, using defaults", err);
+      new Notice(`${PRODUCT_NAME}: settings could not be read — defaults restored.`);
     }
+    const raw = (typeof stored === "object" && stored !== null ? stored : {}) as Record<
+      string,
+      unknown
+    >;
+
+    // Read the version from the RAW blob, BEFORE merging defaults: a merged object
+    // would inherit the current version number and skip its own migration forever.
+    const { raw: migrated, fromVersion } = migrateRawSettings(raw);
+    if (fromVersion > SCHEMA_VERSION) {
+      console.warn(
+        `Attachment Audit: settings were written by a newer version (${fromVersion}); ` +
+          "loading them conservatively."
+      );
+    }
+
+    this.settings = normalizeSettings(
+      Object.assign(safeClone(DEFAULT_SETTINGS), migrated),
+      DEFAULT_SETTINGS
+    );
     this.rebuildKeySets();
+    // Persist the upgrade once, so the migration doesn't re-run on every load.
+    if (fromVersion !== SCHEMA_VERSION && fromVersion <= SCHEMA_VERSION) {
+      await this.saveSettings();
+    }
   }
 
   async saveSettings(): Promise<void> {
@@ -191,6 +252,10 @@ export default class AttachmentManagerPlugin extends Plugin {
   }
 
   onunload(): void {
+    // Stop any in-flight scan FIRST: without this it keeps walking the vault and
+    // then writes data.json for a plugin that no longer exists.
+    this.unloaded = true;
+    this.rescanQueued = false;
     this.flushPendingSave();
     this.finishSettle();
     if (this.refreshTimer !== null) {
@@ -204,9 +269,16 @@ export default class AttachmentManagerPlugin extends Plugin {
     this.reviewedSet = new Set(this.settings.reviewedIssueKeys);
   }
 
-  /** Drop ignore/reviewed keys only for attachments that no longer exist. */
+  /**
+   * Drop ignore/reviewed keys only for attachments that no longer exist.
+   *
+   * "missing" issues are exempt: their path names a file that by definition does
+   * NOT exist, so pruning them would silently forget the user's choice to ignore
+   * a broken link on every single scan.
+   */
   private pruneKeys(): void {
     const gone = (key: string): boolean =>
+      issueKeyType(key) !== "missing" &&
       this.app.vault.getAbstractFileByPath(issueKeyPath(key)) === null;
     for (const k of [...this.ignoredSet]) if (gone(k)) this.ignoredSet.delete(k);
     for (const k of [...this.reviewedSet]) if (gone(k)) this.reviewedSet.delete(k);
@@ -279,6 +351,14 @@ export default class AttachmentManagerPlugin extends Plugin {
     this.scanning = true;
     this.scanDone = 0;
     this.scanTotal = 0;
+    this.scanPhase = "collect";
+    this.lastScanError = null;
+    // Start collecting source changes from BEFORE the mention pass runs, so
+    // anything edited while the scan is in flight is still re-checked afterwards.
+    // Installed here (not on success) so in-flight edits land in it — but a scan
+    // that does NOT complete must not leave this fresh set guarding the OLDER
+    // results that are still on screen, so the catch below invalidates it.
+    this.mentionBasis = new Set<string>();
     this.refreshViews();
 
     try {
@@ -289,11 +369,13 @@ export default class AttachmentManagerPlugin extends Plugin {
         config,
         this.isPro,
         now,
-        (done, total) => {
+        (done, total, phase) => {
           this.scanDone = done;
           this.scanTotal = total;
-          for (const view of this.views()) view.showScanProgress(done, total);
-        }
+          this.scanPhase = phase;
+          for (const view of this.views()) view.showScanProgress(done, total, phase);
+        },
+        () => this.unloaded
       );
       const scannedAt = new Date(now).toISOString();
 
@@ -328,16 +410,28 @@ export default class AttachmentManagerPlugin extends Plugin {
         );
       }
     } catch (err) {
-      console.error("Attachment Audit: scan failed", err);
-      new Notice(`${PRODUCT_NAME}: scan failed. See the console for details.`);
+      // The results still on screen came from an EARLIER scan, but the basis was
+      // reset for this one — leaving a near-empty set guarding stale results, so a
+      // trash click would re-read almost nothing. Force a full re-check.
+      this.invalidateMentionBasis();
+      // An aborted scan is not a failure: the plugin unloaded mid-pass. Say
+      // nothing, record nothing, and let the finally block skip the UI work.
+      if (!(err instanceof ScanAbortedError)) {
+        console.error("Attachment Audit: scan failed", err);
+        this.lastScanError = err instanceof Error ? err.message : String(err);
+        new Notice(`${PRODUCT_NAME}: scan failed. See the console for details.`);
+      }
     } finally {
       this.scanning = false;
-      this.refreshViews();
-      if (this.rescanQueued) {
-        this.rescanQueued = false;
-        const id = this.queuedProfileId;
-        this.queuedProfileId = undefined;
-        void this.runScan(id);
+      // No `return` in a finally block — it would swallow any in-flight throw.
+      if (!this.unloaded) {
+        this.refreshViews();
+        if (this.rescanQueued) {
+          this.rescanQueued = false;
+          const id = this.queuedProfileId;
+          this.queuedProfileId = undefined;
+          void this.runScan(id);
+        }
       }
     }
   }
@@ -497,16 +591,6 @@ export default class AttachmentManagerPlugin extends Plugin {
     }
   }
 
-  /** Notes that currently reference an attachment, from the resolved link graph. */
-  referencingNotes(path: string): string[] {
-    const resolved = this.app.metadataCache.resolvedLinks;
-    const sources: string[] = [];
-    for (const source of Object.keys(resolved)) {
-      if (source !== path && resolved[source][path]) sources.push(source);
-    }
-    return sources;
-  }
-
   // --- Review queue ---------------------------------------------------------
 
   openReviewQueue(issues?: AttachmentIssue[]): void {
@@ -590,18 +674,53 @@ export default class AttachmentManagerPlugin extends Plugin {
   }
 
   /**
+   * Resolve a folder by path, case-insensitively. `getAbstractFileByPath` is
+   * case-sensitive, so a configured attachment folder of `assets` would not find
+   * an actual `Assets/` — and the collision check below would then silently pass
+   * for every target inside it, defeating its own purpose.
+   */
+  private folderCI(dir: string): TFolder | null {
+    if (!dir) return this.app.vault.getRoot();
+    const exact = this.app.vault.getAbstractFileByPath(dir);
+    if (exact instanceof TFolder) return exact;
+    let current: TFolder | null = this.app.vault.getRoot();
+    for (const segment of dir.split("/")) {
+      if (!segment || !current) return null;
+      const lower = segment.toLowerCase();
+      const next: TAbstractFile | undefined = current.children.find(
+        (c) => c.name.toLowerCase() === lower
+      );
+      current = next instanceof TFolder ? next : null;
+    }
+    return current;
+  }
+
+  /**
    * Case-insensitive path existence check. `getAbstractFileByPath` is case-
    * sensitive, but macOS/Windows filesystems are not — so a move/rename target
    * that differs only in case from an existing sibling must count as a collision.
+   *
+   * `ignorePath` excludes the file being moved/renamed from the sibling scan.
+   * Without it a case-only rename (`Photo.png` → `photo.png`) matches ITSELF,
+   * reports a collision, and silently produces `photo (2).png` instead — which
+   * broke case normalization for every file in the vault.
    */
-  private pathExistsCI(target: string): boolean {
-    if (this.app.vault.getAbstractFileByPath(target)) return true;
+  private pathExistsCI(target: string, ignorePath?: string): boolean {
+    // The EXACT-path check runs first. Short-circuiting on the case-insensitive
+    // comparison would hide a real, distinct file: on a case-sensitive filesystem
+    // (Linux, Android) `img/Photo.png` and `img/photo.png` coexist, so renaming
+    // the first to the second must still report a collision.
+    if (target !== ignorePath && this.app.vault.getAbstractFileByPath(target)) return true;
+    const ignoreLower = ignorePath?.toLowerCase();
+    if (target.toLowerCase() === ignoreLower) return false;
     const slash = target.lastIndexOf("/");
     const dir = slash === -1 ? "" : target.slice(0, slash);
     const nameLower = target.slice(slash + 1).toLowerCase();
-    const folder = dir ? this.app.vault.getAbstractFileByPath(dir) : this.app.vault.getRoot();
-    const children = (folder as { children?: Array<{ name: string }> } | null)?.children;
-    return children ? children.some((c) => c.name.toLowerCase() === nameLower) : false;
+    const folder = this.folderCI(dir);
+    if (!folder) return false;
+    return folder.children.some(
+      (c) => c.name.toLowerCase() === nameLower && c.path.toLowerCase() !== ignoreLower
+    );
   }
 
   /**
@@ -617,6 +736,53 @@ export default class AttachmentManagerPlugin extends Plugin {
       if (i.issueType === "unused") set.add(i.attachmentPath);
     }
     return set;
+  }
+
+  /**
+   * The set of source files that may have changed since the scan behind
+   * `lastResult` — the basis for an incremental live re-check.
+   *
+   * Returns `undefined` (meaning "re-read everything") whenever the set cannot be
+   * trusted: no scan yet, or something happened that could have made a path
+   * "unused" without the mention pass ever having evaluated it. Being wrong here
+   * deletes a file the user still references, so every uncertain case falls back
+   * to the full scan.
+   */
+  private changedSourcesSince(): ReadonlySet<string> | undefined {
+    if (!this.lastResult) return undefined;
+    return this.mentionBasis ?? undefined;
+  }
+
+  /**
+   * When the scan behind `lastResult` started, as a SECOND change signal unioned
+   * with the event-derived set above. Vault events are authoritative for writes
+   * that go through the `Vault` API (including sync), but a plugin writing via
+   * `vault.adapter.write()` bypasses that emitter entirely — and such a write does
+   * update the file's mtime. Neither signal alone covers both cases; a source is
+   * only skipped when both say it is untouched.
+   */
+  private scanStartedMs(): number | undefined {
+    const at = this.lastResult?.scannedAt;
+    if (!at) return undefined;
+    const ms = Date.parse(at);
+    return Number.isNaN(ms) ? undefined : ms;
+  }
+
+  /**
+   * Paths of mention sources modified since the last scan started, or `null` when
+   * the tracking is known to be incomplete and a full re-read is required.
+   */
+  private mentionBasis: Set<string> | null = null;
+
+  /** Force the next live re-check to read every source. */
+  private invalidateMentionBasis(): void {
+    this.mentionBasis = null;
+  }
+
+  /** Record a source file whose content may now reference something new. */
+  private noteSourceChanged(path: string): void {
+    if (this.mentionBasis === null) return; // already doing a full re-read
+    if (isMentionSourcePath(path)) this.mentionBasis.add(path);
   }
 
   /**
@@ -641,7 +807,9 @@ export default class AttachmentManagerPlugin extends Plugin {
     );
     const mentioned = await findMentionedAttachments(
       this.app,
-      candidatePaths.map((p) => ({ path: p, name: nameByPath.get(p) ?? attachmentBaseName(p) }))
+      candidatePaths.map((p) => ({ path: p, name: nameByPath.get(p) ?? attachmentBaseName(p) })),
+      this.changedSourcesSince(),
+      this.scanStartedMs()
     );
     const trashed: string[] = [];
     let skipped = 0;
@@ -684,7 +852,8 @@ export default class AttachmentManagerPlugin extends Plugin {
       selected,
       this.lastResult?.issues ?? [],
       unused,
-      inbound
+      inbound,
+      (p) => this.app.vault.getFileByPath(p) !== null
     );
 
     if (toTrash.length === 0) {
@@ -698,7 +867,9 @@ export default class AttachmentManagerPlugin extends Plugin {
     // Live second-signal re-check before trashing any copy.
     const mentioned = await findMentionedAttachments(
       this.app,
-      unique(toTrash).map((p) => ({ path: p, name: nameByPath.get(p) ?? attachmentBaseName(p) }))
+      unique(toTrash).map((p) => ({ path: p, name: nameByPath.get(p) ?? attachmentBaseName(p) })),
+      this.changedSourcesSince(),
+      this.scanStartedMs()
     );
     const trashed: string[] = [];
     let skipped = 0;
@@ -747,15 +918,27 @@ export default class AttachmentManagerPlugin extends Plugin {
       }
     }
     const moved: string[] = [];
+    const inSubfolder: string[] = [];
     let skipped = 0;
     let failed = 0;
+    const folderPrefix = normFolder + "/";
     for (const path of unique(issues.map((i) => i.attachmentPath))) {
       const file = this.app.vault.getFileByPath(path);
       if (!file) { skipped++; continue; }
+      // A file already SOMEWHERE under the attachment folder is left alone.
+      // `moveTargetPath` always targets `<folder>/<basename>`, so moving
+      // `assets/2024/photo.png` would flatten it to `assets/photo.png` and destroy
+      // the user's subfolder organisation — for a file the misplaced detector
+      // never even flagged (it accepts any descendant).
+      if (path.startsWith(folderPrefix)) {
+        if (path.slice(folderPrefix.length).includes("/")) inSubfolder.push(path);
+        skipped++;
+        continue;
+      }
       const desired = moveTargetPath(path, normFolder);
       if (desired === path) { skipped++; continue; } // already there
-      const target = uniquePath(desired, (p) => this.pathExistsCI(p));
-      if (this.pathExistsCI(target)) { skipped++; continue; }
+      const target = uniquePath(desired, (p) => this.pathExistsCI(p, path));
+      if (this.pathExistsCI(target, path)) { skipped++; continue; }
       try {
         await this.app.fileManager.renameFile(file, target);
         moved.push(target);
@@ -765,6 +948,13 @@ export default class AttachmentManagerPlugin extends Plugin {
       }
     }
     this.reportBulk("Moved", moved.length, skipped, failed);
+    if (inSubfolder.length > 0) {
+      new Notice(
+        `${PRODUCT_NAME}: left ${inSubfolder.length} file${inSubfolder.length === 1 ? "" : "s"} ` +
+          `in ${inSubfolder.length === 1 ? "its" : "their"} subfolder under "${folder}" — ` +
+          "moving would have flattened your folder structure."
+      );
+    }
     return moved;
   }
 
@@ -779,16 +969,9 @@ export default class AttachmentManagerPlugin extends Plugin {
       new Notice(`${PRODUCT_NAME}: a scan is running — try again in a moment.`);
       return null;
     }
-    // Strip control chars (without a control-char regex), illegal path chars, and
-    // trailing dots/spaces (Windows silently drops those, diverging the stored
-    // path from the real file). Reject reserved Windows device names.
-    const clean = Array.from(newBasename.trim())
-      .filter((c) => c.charCodeAt(0) >= 32)
-      .join("")
-      .replace(/[\\/:*?"<>|]/g, "")
-      .replace(/[. ]+$/, "");
-    if (!clean || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(clean)) {
-      new Notice(`${PRODUCT_NAME}: enter a valid name.`);
+    const { name: clean, reason } = sanitizeBaseName(newBasename);
+    if (!clean) {
+      new Notice(`${PRODUCT_NAME}: ${reason ?? "enter a valid name."}`);
       return null;
     }
     const file = this.app.vault.getFileByPath(path);
@@ -797,10 +980,12 @@ export default class AttachmentManagerPlugin extends Plugin {
     const fileName = ext ? `${clean}.${ext}` : clean;
     const desired = joinPath(dirName(path), fileName);
     if (desired === path) return path;
-    const target = uniquePath(desired, (p) => this.pathExistsCI(p));
+    // Exclude the file being renamed from the collision scan, so a case-only
+    // rename doesn't collide with itself and get a " (2)" suffix.
+    const target = uniquePath(desired, (p) => this.pathExistsCI(p, path));
     // Never rename onto an existing file (case-insensitive; uniquePath can return a
     // colliding path only in the pathological exhaustion case).
-    if (this.pathExistsCI(target)) {
+    if (this.pathExistsCI(target, path)) {
       new Notice(`${PRODUCT_NAME}: a file named "${attachmentBaseName(target)}" already exists.`);
       return null;
     }
@@ -815,9 +1000,40 @@ export default class AttachmentManagerPlugin extends Plugin {
     }
   }
 
-  /** Confirm-modal helper for destructive bulk actions (count + reclaimable size). */
-  confirmDestructive(title: string, body: string, confirmText: string, onConfirm: () => void): void {
-    new ConfirmModal(this.app, { title, body, confirmText, onConfirm }).open();
+  /**
+   * Confirm-modal helper for destructive actions. `files` lists the exact paths
+   * about to be touched — without it "Move 14 file(s) to trash" gives the user no
+   * way to spot the one they didn't mean to select.
+   */
+  confirmDestructive(
+    title: string,
+    body: string,
+    confirmText: string,
+    onConfirm: () => void,
+    files?: string[]
+  ): void {
+    new ConfirmModal(this.app, { title, body, confirmText, onConfirm, files }).open();
+  }
+
+  /**
+   * The single source of truth for the move action's confirm copy. It used to be
+   * written out twice — in the bulk bar and in the row menu — with different
+   * wording, so the two surfaces described the same operation differently.
+   */
+  describeMoveAction(count: number): string {
+    const folder = this.settings.attachmentFolder.trim();
+    const what = count === 1 ? "this file" : `${count} selected files`;
+    return (
+      `Move ${what} into "${folder}"? ` +
+      "Markdown, wikilink, and canvas links are updated; raw HTML <img src> and " +
+      "frontmatter path strings are not. Files already in that folder — including " +
+      "in its subfolders — are left where they are."
+    );
+  }
+
+  /** Reset every open dashboard back to the unfiltered view. */
+  clearDashboardFilter(): void {
+    for (const view of this.views()) view.resetFilter();
   }
 
   /**
@@ -913,7 +1129,8 @@ export default class AttachmentManagerPlugin extends Plugin {
         // floor (let the writes flush) and a ceiling (never hang the UI) — more
         // reliable than a blind fixed delay on large vaults.
         let floorPassed = false;
-        window.setTimeout(() => {
+        this.settleFloorTimer = window.setTimeout(() => {
+          this.settleFloorTimer = null;
           floorPassed = true;
         }, 300);
         this.settleEvtRef = this.app.metadataCache.on("resolved", () => {
@@ -930,6 +1147,10 @@ export default class AttachmentManagerPlugin extends Plugin {
     if (this.settleTimer !== null) {
       window.clearTimeout(this.settleTimer);
       this.settleTimer = null;
+    }
+    if (this.settleFloorTimer !== null) {
+      window.clearTimeout(this.settleFloorTimer);
+      this.settleFloorTimer = null;
     }
     if (this.settleEvtRef) {
       this.app.metadataCache.offref(this.settleEvtRef);
@@ -954,10 +1175,20 @@ export default class AttachmentManagerPlugin extends Plugin {
     return this.ignoredSet.size;
   }
 
+  reviewedCount(): number {
+    return this.reviewedSet.size;
+  }
+
   // --- Pro: report export ---------------------------------------------------
 
+  /**
+   * Report export is FREE. It is non-destructive, it is the most shareable proof
+   * that the plugin works, and paywalling it made the free tier feel deliberately
+   * tedious rather than genuinely useful. Pro is for acting at scale, not for
+   * looking at your own vault.
+   */
   private exportReportCommand(): void {
-    requirePro(this, "export", () => void this.exportReport());
+    void this.exportReport();
   }
 
   async exportReport(issues?: AttachmentIssue[]): Promise<void> {

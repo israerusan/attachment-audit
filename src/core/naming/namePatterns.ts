@@ -19,6 +19,8 @@ export const DEFAULT_JUNK_NAME_PATTERNS: string[] = [
   "^unknown( \\(\\d+\\))?$",
 ];
 
+import { checkRegexSafety } from "../rules/regexSafety";
+
 // Compile each pattern once and reuse across every attachment in a scan. An
 // invalid pattern is cached as `null` so it is skipped without recompiling.
 const cache = new Map<string, RegExp | null>();
@@ -26,21 +28,26 @@ const cache = new Map<string, RegExp | null>();
 function compile(pattern: string): RegExp | null {
   if (cache.has(pattern)) return cache.get(pattern) ?? null;
   let re: RegExp | null = null;
-  try {
-    re = new RegExp(pattern, "i");
-  } catch {
-    re = null; // a malformed user pattern must never throw mid-scan
+  // Screen BEFORE compiling: junk-name patterns are a free-tier textarea, and a
+  // nested-quantifier pattern here runs once per attachment on the UI thread.
+  // Truncating the input can't save us — backtracking is exponential in length.
+  if (checkRegexSafety(pattern).safe) {
+    try {
+      re = new RegExp(pattern, "i");
+    } catch {
+      re = null; // a malformed user pattern must never throw mid-scan
+    }
   }
   cache.set(pattern, re);
   return re;
 }
 
 /**
- * True when `basename` matches any junk pattern. Empty/whitespace patterns and
- * malformed regexes are ignored. Matching is case-insensitive.
+ * True when `basename` matches any junk pattern. Empty/whitespace patterns,
+ * malformed regexes, and patterns screened out as catastrophic are ignored.
+ * Matching is case-insensitive.
  */
 export function matchesJunkName(basename: string, patterns: string[]): boolean {
-  // Cap length so a catastrophic-backtracking user pattern can't hang the scan.
   const name = basename.trim().slice(0, 256);
   if (!name) return false;
   for (const pattern of patterns) {

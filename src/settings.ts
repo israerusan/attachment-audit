@@ -1,45 +1,16 @@
 import { App, PluginSettingTab, Setting, Notice } from "obsidian";
 import type AttachmentManagerPlugin from "./main";
-import type { AttachmentManagerSettings, IssueType, CustomRule, ScanProfile } from "./types";
+import type { IssueType, CustomRule, ScanProfile } from "./types";
 import { ISSUE_TYPES, ISSUE_TYPE_LABELS } from "./types";
 import { DEFAULT_JUNK_NAME_PATTERNS } from "./core/naming/namePatterns";
+import { checkRegexSafety } from "./core/rules/regexSafety";
 import { LicenseManager } from "./core/license/LicenseManager";
 import { PRO_NAME, PRO_TAGLINE, PURCHASE_URL, REVIEW_URL } from "./product";
 import { RuleEditModal } from "./ui/RuleEditModal";
 import { ProfileEditModal } from "./ui/ProfileEditModal";
-
-export const DEFAULT_SETTINGS: AttachmentManagerSettings = {
-  version: 1,
-  enabledIssueTypes: [...ISSUE_TYPES],
-  largeSizeThresholdKb: 1024, // 1 MB
-  attachmentFolder: "",
-  junkNamePatterns: [...DEFAULT_JUNK_NAME_PATTERNS],
-  duplicateMaxScanKb: 51200, // skip hashing files over 50 MB (memory guard)
-  attachmentExtensions: [],
-  excludedFolders: [],
-  excludedPaths: [],
-  ignoredIssueKeys: [],
-  reviewedIssueKeys: [],
-  licenseKey: "",
-  licenseStatus: "free",
-  severityWeights: {
-    unused: 3,
-    duplicate: 3,
-    large: 2,
-    unnamed: 1,
-    misplaced: 1,
-    custom: 2,
-  },
-  sortMode: "severity",
-  savedProfiles: [],
-  customRules: [],
-  onboardingDismissed: false,
-  proCtaDismissed: false,
-  singleTrashCount: 0,
-  reclaimedTotalBytes: 0,
-  reviewAsked: false,
-  bulkTrialUsed: false,
-};
+// DEFAULT_SETTINGS lives in core/settings/defaults.ts (pure data, reachable from
+// the Node test path). Re-exported here so existing imports keep working.
+export { DEFAULT_SETTINGS } from "./core/settings/defaults";
 
 /** Split a comma/newline separated field into trimmed, non-empty entries. */
 export function parseList(value: string): string[] {
@@ -50,7 +21,14 @@ export function parseList(value: string): string[] {
 }
 
 /** Detectors the user can toggle in settings (custom is driven by rules). */
-const BUILT_IN_TYPES: IssueType[] = ["unused", "duplicate", "large", "unnamed", "misplaced"];
+const BUILT_IN_TYPES: IssueType[] = [
+  "unused",
+  "duplicate",
+  "large",
+  "unnamed",
+  "misplaced",
+  "missing",
+];
 
 const DETECTOR_DESC: Record<string, string> = {
   unused: "Attachments no note references (two-signal check; safe to trash).",
@@ -58,11 +36,35 @@ const DETECTOR_DESC: Record<string, string> = {
   large: "Files over the size threshold below.",
   unnamed: "Auto-generated names like “Pasted image …”.",
   misplaced: "Files outside your attachment folder below.",
+  missing:
+    "Links pointing at attachments that no longer exist. Covers Markdown and wikilinks; " +
+    "references written as raw HTML, in canvas, or in frontmatter are not tracked by Obsidian and won't appear.",
 };
 
 export class AttachmentManagerSettingTab extends PluginSettingTab {
+  /** Inline warning slot for junk-name patterns that were screened out. */
+  private patternWarningEl: HTMLElement | null = null;
+
   constructor(app: App, private plugin: AttachmentManagerPlugin) {
     super(app, plugin);
+  }
+
+  /**
+   * Surface any pattern the safety screen refuses. Silently ignoring them would
+   * look identical to "this detector doesn't work".
+   */
+  private reportUnsafePatterns(patterns: string[]): void {
+    const host = this.patternWarningEl;
+    if (!host) return;
+    host.empty();
+    const bad = patterns
+      .map((p) => ({ pattern: p, verdict: checkRegexSafety(p) }))
+      .filter((r) => !r.verdict.safe);
+    if (bad.length === 0) return;
+    host.addClass("attachment-audit-warning");
+    for (const { pattern, verdict } of bad) {
+      host.createDiv({ text: `Skipping "${pattern}" — ${verdict.reason ?? "unusable pattern."}` });
+    }
   }
 
   display(): void {
@@ -152,7 +154,9 @@ export class AttachmentManagerSettingTab extends PluginSettingTab {
         t
           .setValue(s.junkNamePatterns.join("\n"))
           .onChange(async (v) => {
-            s.junkNamePatterns = parseList(v);
+            const patterns = parseList(v);
+            s.junkNamePatterns = patterns;
+            this.reportUnsafePatterns(patterns);
             await this.save();
           })
       )
@@ -165,6 +169,27 @@ export class AttachmentManagerSettingTab extends PluginSettingTab {
             await this.saveNow();
             this.display();
           })
+      );
+
+    // Tell the user immediately when a pattern is refused, rather than letting it
+    // silently never match. The engine screens these anyway (a nested-quantifier
+    // regex would hang Obsidian on every attachment), but silent rejection would
+    // look like the detector was broken.
+    this.patternWarningEl = containerEl.createDiv({ cls: "attachment-audit-nudge" });
+    this.reportUnsafePatterns(s.junkNamePatterns);
+
+    new Setting(containerEl)
+      .setName("Show image previews")
+      .setDesc(
+        "Render a small thumbnail beside image results. Turn off on very large vaults " +
+          "or slow remote storage."
+      )
+      .addToggle((t) =>
+        t.setValue(s.showThumbnails).onChange(async (v) => {
+          s.showThumbnails = v;
+          await this.save();
+          this.plugin.refreshViews();
+        })
       );
 
     new Setting(containerEl)
@@ -445,10 +470,20 @@ export class AttachmentManagerSettingTab extends PluginSettingTab {
   }
 }
 
+/**
+ * Largest size threshold accepted, in MB (64 TB). Matches the clamp
+ * `normalizeSettings` applies on load.
+ */
+const MAX_THRESHOLD_MB = 1024 * 1024 * 64;
+
 function clampFloat(value: string, min: number, fallback: number): number {
   const n = Number.parseFloat(value);
-  if (Number.isNaN(n)) return fallback;
-  return Math.max(min, n);
+  if (!Number.isFinite(n)) return fallback;
+  // The UPPER bound matters as much as the lower one, and it only existed on the
+  // load path: typing 100000000 into the MB box put 1.024e11 KB straight into the
+  // live settings, and the `large` detector then silently reported nothing for the
+  // rest of the session with nothing in the UI to explain why.
+  return Math.min(MAX_THRESHOLD_MB, Math.max(min, n));
 }
 
 function round2(n: number): number {

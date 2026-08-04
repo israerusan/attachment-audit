@@ -46,5 +46,28 @@ export default tseslint.config(
 			// targets minAppVersion 1.4.0 and uses the classic display() settings tab.
 			"obsidianmd/settings-tab/prefer-setting-definitions": "off",
 		},
+	},
+	// The architecture's load-bearing rule, made self-enforcing. `src/core/**` is a
+	// pure, Node-testable tree; `src/core/scan/scanVault.ts` is its ONE boundary to
+	// the Obsidian API. Until now that was held together by a comment, so a single
+	// `import { Notice }` in a detector would have quietly ended the property that
+	// makes the whole core unit-testable.
+	{
+		files: ["src/core/**/*.ts"],
+		ignores: ["src/core/scan/scanVault.ts"],
+		rules: {
+			"no-restricted-imports": [
+				"error",
+				{
+					paths: [
+						{
+							name: "obsidian",
+							message:
+								"src/core must stay pure and Node-testable. The only Obsidian boundary is src/core/scan/scanVault.ts.",
+						},
+					],
+				},
+			],
+		},
 	}
 );

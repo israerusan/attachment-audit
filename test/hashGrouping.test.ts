@@ -24,3 +24,39 @@ assert.deepStrictEqual(grouped.get("x"), ["a", "b"]);
 assert.strictEqual(grouped.has("y"), false);
 
 console.log("hashGrouping tests passed");
+
+// --- Zero-byte files must never form a duplicate cluster --------------------
+// Every empty file shares the SHA-256 of the empty string, so a folder of failed
+// downloads (.png, .pdf, .zip) would otherwise become ONE cluster reported as
+// "identical" — and "trash duplicate copies" would delete hundreds of unrelated
+// files to reclaim exactly 0 bytes.
+const empties = sizeCollisionCandidates([
+  { path: "a.png", size: 0 },
+  { path: "b.pdf", size: 0 },
+  { path: "c.zip", size: 0 },
+]);
+assert.deepStrictEqual(empties, [], "empty files are never hashing candidates");
+
+// Mixed: the real collision is still found, the empties are still excluded.
+const mixed = sizeCollisionCandidates([
+  { path: "empty1.png", size: 0 },
+  { path: "empty2.png", size: 0 },
+  { path: "real1.png", size: 100 },
+  { path: "real2.png", size: 100 },
+  { path: "unique.png", size: 55 },
+]);
+assert.deepStrictEqual(
+  mixed.map((f) => f.path),
+  ["real1.png", "real2.png"]
+);
+
+// A negative size (defensive: a stat that failed) is treated the same way.
+assert.deepStrictEqual(
+  sizeCollisionCandidates([
+    { path: "x.png", size: -1 },
+    { path: "y.png", size: -1 },
+  ]),
+  []
+);
+
+console.log("hashGrouping zero-byte tests passed");

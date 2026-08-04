@@ -57,3 +57,53 @@ const dup = (path: string, cluster: string): AttachmentIssue =>
 }
 
 console.log("duplicateTrashSelection tests passed");
+
+// --- Survivors must exist ON DISK, not merely in the last scan --------------
+// "At least one copy always survives" previously rested entirely on the vault's
+// delete event having fired and pruned the scan results. A copy deleted outside
+// Obsidian — or an event missed during a sync — left a phantom survivor in the
+// list and let the real last copy be trashed.
+{
+  const dup = (path: string): AttachmentIssue => ({
+    id: `${path}::duplicate`,
+    attachmentPath: path,
+    attachmentName: path,
+    issueType: "duplicate",
+    severity: 3,
+    reason: "identical",
+    sizeBytes: 10,
+    clusterId: "hash-1",
+  });
+  const a = dup("a.png");
+  const b = dup("b.png");
+  const all = [a, b];
+  const unused = new Set(["a.png", "b.png"]);
+  const inbound = new Map<string, number>();
+
+  // Both on disk, only `a` selected: `b` survives, so `a` may go.
+  assert.deepStrictEqual(
+    selectDuplicateCopiesToTrash([a], all, unused, inbound, () => true),
+    ["a.png"]
+  );
+
+  // `b` is already gone from disk (stale scan). `a` is now the LAST copy and
+  // must be kept, even though the scan still lists `b` as a cluster member.
+  assert.deepStrictEqual(
+    selectDuplicateCopiesToTrash([a], all, unused, inbound, (p) => p !== "b.png"),
+    [],
+    "the last surviving copy on disk is never trashed"
+  );
+
+  // Selecting BOTH with both present still keeps one.
+  assert.strictEqual(
+    selectDuplicateCopiesToTrash([a, b], all, unused, inbound, () => true).length,
+    1,
+    "keep-one still applies when every copy is selected"
+  );
+
+  // Omitting the existence probe preserves the old behaviour (used by callers
+  // that have no filesystem, and by the pure tests above).
+  assert.deepStrictEqual(selectDuplicateCopiesToTrash([a], all, unused, inbound), ["a.png"]);
+}
+
+console.log("duplicateTrashSelection survivor-existence tests passed");

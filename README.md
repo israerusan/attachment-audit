@@ -28,10 +28,11 @@ Attachment Audit exists to make that decision with evidence instead of vibes.
 ## What it finds
 
 - **Unused** — attachments no note truly references
-- **Duplicates** — byte-identical copies grouped with SHA-256
+- **Duplicates** — byte-identical copies grouped with SHA-256, shown as one cluster with the recoverable total
 - **Large files** — oversized attachments worth reviewing first
 - **Poorly named** — junk like `Pasted image...`, `Screenshot...`, `IMG_1234`, or `Untitled`
 - **Misplaced** — attachments living outside your chosen attachment folder
+- **Broken links** — the inverse problem: links pointing at attachments that no longer exist, with the notes to fix
 
 ## Why it is safer than a generic orphan finder
 
@@ -39,32 +40,39 @@ Attachment Audit does not flag an attachment as unused from resolved Markdown li
 
 It cross-checks two independent signals:
 - resolved links
-- a raw-content mention scan across note bodies, frontmatter, and canvas files
+- a raw-content mention scan across note bodies, frontmatter, canvas files, and around forty text formats — including `.txt`, `.tex`, `.json`, `.excalidraw`, SVG, HTML and CSS
 
-That means a file referenced only in canvas, frontmatter, or raw HTML is far less likely to be misclassified as trash.
+It also reads Obsidian's own config folder, so an image used only by a CSS snippet or by another plugin's settings is not mistaken for junk.
+
+That means a file referenced only in canvas, frontmatter, raw HTML, a LaTeX include, or a theme snippet is far less likely to be misclassified as trash.
 
 It also keeps cleanup sane:
 - nothing is hard-deleted
 - moves and renames preserve links
+- moves never flatten your subfolders
 - duplicate cleanup only removes copies nothing links to, and never trashes every copy
-- destructive actions re-validate before acting
+- destructive actions re-validate before acting, and show you exactly which files they will touch
+- if any source file cannot be read, nothing is flagged unused that run
 
 ## Free vs Pro
 
-Free proves value. Pro is for doing cleanup at scale.
+Free is a complete audit tool. Pro is for *changing* many files at once.
 
 | Feature | Free | Pro |
 | --- | :---: | :---: |
-| All five detectors | ✓ | ✓ |
+| All six detectors | ✓ | ✓ |
 | Dashboard with reclaimable-space total | ✓ | ✓ |
+| Image previews and duplicate grouping | ✓ | ✓ |
 | One-file-at-a-time cleanup | ✓ | ✓ |
 | Open / reveal / rename / ignore / exclude / mark reviewed | ✓ | ✓ |
 | Per-detector thresholds and exclusions | ✓ | ✓ |
-| Bulk cleanup across many files |  | ✓ |
+| Multi-select, bulk ignore and bulk mark-reviewed | ✓ | ✓ |
+| Markdown report export | ✓ | ✓ |
+| Your first bulk cleanup | ✓ | ✓ |
+| Unlimited bulk trash, dedupe and move |  | ✓ |
 | Saved scan profiles |  | ✓ |
 | Custom rules |  | ✓ |
 | Severity tuning |  | ✓ |
-| Markdown report export |  | ✓ |
 
 Purchase: [Buy Me a Coffee — Attachment Audit Pro](https://buymeacoffee.com/vaultspotlight/e/560207). License keys are verified **offline** (Ed25519) — no account, server, or subscription.
 
