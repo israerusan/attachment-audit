@@ -1311,12 +1311,15 @@ export default class AttachmentManagerPlugin extends Plugin {
   /**
    * Every file under `.trash`, at any depth.
    *
-   * Obsidian's local trash layout is undocumented, and it could not be verified
-   * here whether a trashed `assets/logo.png` lands at `.trash/logo.png` or
-   * `.trash/assets/logo.png`. `adapter.list` is NOT recursive, so a flat listing
-   * would silently find nothing for every attachment in a subfolder — the
-   * feature would appear to work and never restore anything. Walking handles
-   * both layouts without needing to know which one is real.
+   * VERIFIED against a real vault (Obsidian 1.5+, local trash): the layout is
+   * FLAT — trashing `assets/2024/screenshots/x.png` produces `.trash/x.png`, with
+   * the folder structure discarded. A non-recursive listing would therefore have
+   * worked.
+   *
+   * The walk stays anyway. It costs one `list` call on a directory that is
+   * usually small, and it is the difference between "works today" and "works if
+   * Obsidian ever preserves structure, or if some platform's adapter differs".
+   * The behaviour is undocumented, so it can change without notice.
    */
   private async listTrashRecursive(
     adapter: DataAdapter,

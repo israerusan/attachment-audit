@@ -5,6 +5,12 @@
 // written, and `.trash` accumulates EVERYTHING the user has ever locally deleted
 // — not just what this plugin did — so the pool is full of near-misses.
 //
+// Verified against a real vault: the trash is FLAT (basename only, folders
+// discarded), and a trashed file keeps its bytes, so the content gate below
+// passes on the honest path. What remains unverified is what Obsidian names a
+// COLLIDING file and whether it preserves mtime — which is exactly why neither
+// is allowed to be decisive here.
+//
 // The rule is therefore: identify, or refuse. Never guess. A refused restore is
 // an inconvenience; a wrong one writes a stranger's content to a path the user
 // believes is recovered AND consumes the real file from `.trash`, putting it
