@@ -21,8 +21,19 @@ export interface JournalEntry {
   from: string;
   /** Where it is AFTER (move/rename). Absent for a trash. */
   to?: string;
-  /** Size at the time — shown in the history, and used to identify the file in the trash. */
+  /**
+   * Size at the moment of the action — shown in the history, and a hard gate when
+   * identifying the file in the trash. Read from the file immediately before the
+   * mutation, NOT from the scan: a file edited between the scan and the trash
+   * would otherwise carry a stale size and never be identifiable again.
+   */
   sizeBytes: number;
+  /**
+   * Modification time at the moment of the action. A rename preserves mtime, so
+   * this survives the trip into `.trash` and disambiguates same-name, same-size
+   * candidates.
+   */
+  mtime?: number;
 }
 
 /** One user-visible action, however many files it touched. */
@@ -45,8 +56,19 @@ export interface JournalBatch {
 /** How many batches to keep. Older ones fall off the end. */
 export const DEFAULT_JOURNAL_LIMIT = 50;
 
-/** Hard ceiling, so a corrupt setting cannot make `data.json` grow without bound. */
+/** Hard ceiling on batch count, so a corrupt setting cannot grow `data.json` without bound. */
 export const MAX_JOURNAL_LIMIT = 500;
+
+/**
+ * Hard ceiling on total ENTRIES across the whole journal.
+ *
+ * The batch cap alone bounds nothing that matters: one "trash every unused file"
+ * on a large vault is easily thousands of entries, each carrying a full path, and
+ * `saveSettings` re-serializes the entire settings object on routine UI actions
+ * like toggling "reviewed". Without this, a few big cleanups put tens of
+ * megabytes of JSON on the main thread every time the user clicks a row.
+ */
+export const MAX_JOURNAL_ENTRIES = 5000;
 
 /**
  * Add a batch to the front of the journal and trim to `limit`. Newest first, so
@@ -59,7 +81,24 @@ export function appendBatch(
 ): JournalBatch[] {
   const capped = Math.max(0, Math.min(MAX_JOURNAL_LIMIT, Math.floor(limit)));
   if (capped === 0) return [];
-  return [batch, ...journal].slice(0, capped);
+  return trimEntries([batch, ...journal].slice(0, capped));
+}
+
+/**
+ * Drop the oldest batches until the journal holds at most
+ * {@link MAX_JOURNAL_ENTRIES} entries in total. The newest batch is always kept
+ * whole, even if it alone exceeds the budget — a history that silently truncated
+ * the action you just took would be worse than useless.
+ */
+export function trimEntries(journal: readonly JournalBatch[]): JournalBatch[] {
+  const out: JournalBatch[] = [];
+  let total = 0;
+  for (const batch of journal) {
+    if (out.length > 0 && total + batch.entries.length > MAX_JOURNAL_ENTRIES) break;
+    out.push(batch);
+    total += batch.entries.length;
+  }
+  return out;
 }
 
 /** Replace one batch by id, leaving the rest untouched. */
@@ -175,6 +214,8 @@ export function normalizeJournal(value: unknown, limit: number): JournalBatch[] 
           typeof e.sizeBytes === "number" && Number.isFinite(e.sizeBytes)
             ? Math.max(0, e.sizeBytes)
             : 0,
+        mtime:
+          typeof e.mtime === "number" && Number.isFinite(e.mtime) ? e.mtime : undefined,
       });
     }
     if (entries.length === 0) continue;
@@ -198,5 +239,5 @@ export function normalizeJournal(value: unknown, limit: number): JournalBatch[] 
   }
 
   const capped = Math.max(0, Math.min(MAX_JOURNAL_LIMIT, Math.floor(limit)));
-  return out.slice(0, capped);
+  return trimEntries(out.slice(0, capped));
 }

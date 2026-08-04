@@ -196,9 +196,11 @@ export class AttachmentManagerSettingTab extends PluginSettingTab {
             s.journalLimit = Number.isFinite(n)
               ? Math.min(MAX_JOURNAL_LIMIT, Math.max(0, n))
               : DEFAULT_JOURNAL_LIMIT;
-            // Trim immediately, so lowering the cap takes effect without waiting
-            // for the next action to push entries off the end.
-            s.journal = s.journal.slice(0, s.journalLimit);
+            // The limit is stored, but the journal is NOT trimmed here. `onChange`
+            // fires per keystroke, so typing "200" would pass through 2 and throw
+            // away 48 batches of still-restorable history before reaching the
+            // value the user wanted. Trimming happens on load (`normalizeJournal`)
+            // and on the next recorded action, neither of which can be typed past.
             await this.save();
           })
       )

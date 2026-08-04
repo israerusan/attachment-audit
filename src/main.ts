@@ -19,14 +19,6 @@ import type {
   SortMode,
   TrashDestination,
 } from "./types";
-
-/** Obsidian's local trash, relative to the vault root. */
-const TRASH_DIR = ".trash";
-
-/** Escape a string for literal use inside a RegExp. */
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, String.fromCharCode(92) + "$&");
-}
 import { DEFAULT_SETTINGS, AttachmentManagerSettingTab } from "./settings";
 import { AttachmentManagerView, VIEW_TYPE_ATTACHMENT_MANAGER } from "./ui/DashboardView";
 import { ReviewQueueModal } from "./ui/ReviewQueueModal";
@@ -54,6 +46,12 @@ import {
   type JournalBatch,
   type JournalEntry,
 } from "./core/journal/actionJournal";
+import {
+  couldBeTrashedAs,
+  explainOutcome,
+  selectTrashCandidate,
+  type TrashCandidate,
+} from "./core/journal/trashCandidates";
 import { formatBytes } from "./core/utils/sizes";
 import { moveTargetPath, uniquePath, dirName, splitExtension, joinPath } from "./core/paths/pathRewrite";
 import { sanitizeBaseName } from "./core/naming/sanitizeName";
@@ -69,6 +67,17 @@ interface CommandsApi {
   commandExists?: (id: string) => boolean;
 }
 type AppInternals = { commands?: CommandsApi };
+
+/** Obsidian's local trash, relative to the vault root. */
+const TRASH_DIR = ".trash";
+
+/** Where a restored file actually landed, or why it could not be put back. */
+interface RestoreOutcome {
+  /** The path the file now occupies — NOT necessarily its original one. */
+  path: string | null;
+  /** User-facing explanation when `path` is null. */
+  reason?: string;
+}
 
 export interface ScanRun {
   issues: AttachmentIssue[];
@@ -120,6 +129,12 @@ export default class AttachmentManagerPlugin extends Plugin {
   private unloaded = false;
   /** Cleared on finishSettle so the settle floor timer can't outlive its wait. */
   private settleFloorTimer: number | null = null;
+  /**
+   * Batch ids with a restore in flight. Obsidian shares one plugin instance
+   * across windows, so two history modals can otherwise both start the same
+   * restore and the second would pick a different trash candidate.
+   */
+  private restoringBatches = new Set<string>();
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -835,6 +850,10 @@ export default class AttachmentManagerPlugin extends Plugin {
       this.scanStartedMs()
     );
     const trashed: string[] = [];
+    const journalEntries: JournalEntry[] = [];
+    // Read ONCE, before anything is trashed: a user changing "Deleted files"
+    // mid-batch must not leave earlier files recorded with the wrong destination.
+    const destination = this.trashDestination();
     let skipped = 0;
     let failed = 0;
     for (const path of unique(issues.map((i) => i.attachmentPath))) {
@@ -843,22 +862,21 @@ export default class AttachmentManagerPlugin extends Plugin {
       // Skip anything newly referenced (by link OR content) or not confirmed unused.
       if ((inbound.get(path) ?? 0) > 0 || !unused.has(path) || mentioned.has(path)) { skipped++; continue; }
       try {
+        // Size and mtime as they are NOW, not as the scan saw them. These are the
+        // identity gate when finding the file again in `.trash`, and a file edited
+        // between the scan and the trash would otherwise be unidentifiable.
+        const sizeBytes = file.stat.size;
+        const mtime = file.stat.mtime;
         await this.app.fileManager.trashFile(file);
         trashed.push(path);
+        journalEntries.push({ from: path, sizeBytes, mtime });
       } catch (err) {
         console.error(`Attachment Audit: could not trash ${path}`, err);
         failed++;
       }
     }
     const reclaimed = trashed.reduce((s, p) => s + (bytesByPath.get(p) ?? 0), 0);
-    // Capture the destination NOW: the user can change their "Deleted files"
-    // setting later, and where these files actually went is what decides whether
-    // they can be put back.
-    await this.recordBatch(
-      "trash",
-      trashed.map((p) => ({ from: p, sizeBytes: bytesByPath.get(p) ?? 0 })),
-      this.trashDestination()
-    );
+    await this.recordBatch("trash", journalEntries, destination);
     this.reportBulk("Trashed", trashed.length, skipped, failed, reclaimed);
     await this.recordTrashOutcome(trashed.length, reclaimed, single);
     return trashed;
@@ -903,6 +921,8 @@ export default class AttachmentManagerPlugin extends Plugin {
       this.scanStartedMs()
     );
     const trashed: string[] = [];
+    const journalEntries: JournalEntry[] = [];
+    const destination = this.trashDestination();
     let skipped = 0;
     let failed = 0;
     for (const path of unique(toTrash)) {
@@ -910,19 +930,18 @@ export default class AttachmentManagerPlugin extends Plugin {
       if (!file) { skipped++; continue; }
       if ((inbound.get(path) ?? 0) > 0 || !unused.has(path) || mentioned.has(path)) { skipped++; continue; }
       try {
+        const sizeBytes = file.stat.size;
+        const mtime = file.stat.mtime;
         await this.app.fileManager.trashFile(file);
         trashed.push(path);
+        journalEntries.push({ from: path, sizeBytes, mtime });
       } catch (err) {
         console.error(`Attachment Audit: could not trash ${path}`, err);
         failed++;
       }
     }
     const reclaimed = trashed.reduce((s, p) => s + (bytesByPath.get(p) ?? 0), 0);
-    await this.recordBatch(
-      "trash",
-      trashed.map((p) => ({ from: p, sizeBytes: bytesByPath.get(p) ?? 0 })),
-      this.trashDestination()
-    );
+    await this.recordBatch("trash", journalEntries, destination);
     this.reportBulk("Trashed", trashed.length, skipped, failed, reclaimed);
     await this.recordTrashOutcome(trashed.length, reclaimed, false);
     return trashed;
@@ -980,9 +999,10 @@ export default class AttachmentManagerPlugin extends Plugin {
       if (this.pathExistsCI(target, path)) { skipped++; continue; }
       try {
         const sizeBytes = file.stat.size;
+        const mtime = file.stat.mtime;
         await this.app.fileManager.renameFile(file, target);
         moved.push(target);
-        journalEntries.push({ from: path, to: target, sizeBytes });
+        journalEntries.push({ from: path, to: target, sizeBytes, mtime });
       } catch (err) {
         console.error(`Attachment Audit: could not move ${path}`, err);
         failed++;
@@ -1033,8 +1053,9 @@ export default class AttachmentManagerPlugin extends Plugin {
     }
     try {
       const sizeBytes = file.stat.size;
+      const mtime = file.stat.mtime;
       await this.app.fileManager.renameFile(file, target);
-      await this.recordBatch("rename", [{ from: path, to: target, sizeBytes }]);
+      await this.recordBatch("rename", [{ from: path, to: target, sizeBytes, mtime }]);
       new Notice(`${PRODUCT_NAME}: renamed to ${attachmentBaseName(target)}.`);
       return target;
     } catch (err) {
@@ -1081,28 +1102,58 @@ export default class AttachmentManagerPlugin extends Plugin {
     const failed: string[] = [];
     if (!batch) return { restored, failed };
 
+    // Same guard every other vault-mutating action carries: a restore racing a
+    // scan would have its results immediately superseded by stale ones.
+    if (this.scanning) {
+      new Notice(`${PRODUCT_NAME}: a scan is running — try again in a moment.`);
+      return { restored, failed };
+    }
+    // Obsidian shares one plugin instance across windows, so two open history
+    // modals can both pass the restorability check before either writes
+    // `revertedAt` — and the second pass would restore a DIFFERENT trash
+    // candidate over the first one's work.
+    if (this.restoringBatches.has(batchId)) {
+      new Notice(`${PRODUCT_NAME}: that restore is already running.`);
+      return { restored, failed };
+    }
+
     const verdict = restorability(batch);
     if (!verdict.restorable) {
       new Notice(`${PRODUCT_NAME}: ${verdict.reason ?? "this cannot be restored."}`);
       return { restored, failed };
     }
 
-    // Reverse order, so a batch that moved A onto B's old path undoes B first.
-    for (const entry of [...batch.entries].reverse()) {
-      try {
-        const ok =
-          batch.op === "trash"
-            ? await this.restoreFromLocalTrash(entry)
-            : await this.reverseMove(entry);
-        if (ok) restored.push(entry.from);
-        else failed.push(entry.from);
-      } catch (err) {
-        console.error(`Attachment Audit: could not restore ${entry.from}`, err);
-        failed.push(entry.from);
+    this.restoringBatches.add(batchId);
+    const landedAt: string[] = [];
+    const reasons: string[] = [];
+    try {
+      // Reverse order, so a batch that moved A onto B's old path undoes B first.
+      for (const entry of [...batch.entries].reverse()) {
+        try {
+          const outcome =
+            batch.op === "trash"
+              ? await this.restoreFromLocalTrash(entry)
+              : await this.reverseMove(entry);
+          if (outcome.path) {
+            restored.push(entry.from);
+            landedAt.push(outcome.path);
+          } else {
+            failed.push(entry.from);
+            if (outcome.reason && !reasons.includes(outcome.reason)) reasons.push(outcome.reason);
+          }
+        } catch (err) {
+          console.error(`Attachment Audit: could not restore ${entry.from}`, err);
+          failed.push(entry.from);
+        }
       }
+    } finally {
+      this.restoringBatches.delete(batchId);
     }
 
-    if (restored.length > 0) {
+    // Only a COMPLETE restore retires the batch. Marking it reverted after a
+    // partial one would strip the button and strand the remaining files, and the
+    // failures here are often transient (a folder being recreated, a busy adapter).
+    if (failed.length === 0 && restored.length > 0) {
       this.settings.journal = replaceBatch(this.settings.journal, batchId, (b) => ({
         ...b,
         revertedAt: new Date().toISOString(),
@@ -1110,25 +1161,47 @@ export default class AttachmentManagerPlugin extends Plugin {
       await this.saveSettings();
     }
 
+    // Report where files ACTUALLY landed. An occupied original path gets a unique
+    // name, and saying "restored" while pointing at a path holding something else
+    // would send the user to the wrong file.
+    const renamed = landedAt.filter((p, i) => p !== restored[i]);
     const parts = [`restored ${restored.length} file${restored.length === 1 ? "" : "s"}`];
-    if (failed.length > 0) parts.push(`${failed.length} could not be put back — see the console`);
-    new Notice(`${PRODUCT_NAME}: ${parts.join(", ")}.`);
-    if (restored.length > 0) await this.settleCacheThenRescan(restored);
+    if (renamed.length > 0) {
+      parts.push(
+        `${renamed.length} kept ${renamed.length === 1 ? "its" : "their"} original name was taken, so ` +
+          `${renamed.length === 1 ? "it is" : "they are"} at ${renamed.slice(0, 2).join(", ")}`
+      );
+    }
+    if (failed.length > 0) {
+      const why = reasons.length > 0 ? ` (${reasons.join("; ")})` : " — see the console";
+      parts.push(`${failed.length} could not be put back${why}`);
+    }
+    new Notice(`${PRODUCT_NAME}: ${parts.join(", ")}.`, failed.length > 0 ? 10000 : undefined);
+    if (landedAt.length > 0) await this.settleCacheThenRescan(landedAt);
     else this.refreshViews();
     return { restored, failed };
   }
 
-  /** Reverse a move or rename by renaming the file back where it came from. */
-  private async reverseMove(entry: JournalEntry): Promise<boolean> {
-    if (!entry.to) return false;
+  /**
+   * Reverse a move or rename by renaming the file back where it came from.
+   *
+   * Verifies identity by size first. The path alone is not proof: the user may
+   * have deleted the moved file and dropped a DIFFERENT file with the same name
+   * in its place, and relocating that one would be a silent data move.
+   */
+  private async reverseMove(entry: JournalEntry): Promise<RestoreOutcome> {
+    if (!entry.to) return { path: null };
     const file = this.app.vault.getFileByPath(entry.to);
-    if (!file) return false; // moved again, or deleted, since the action
+    if (!file) return { path: null, reason: "the file is no longer where it was put" };
+    if (file.stat.size !== entry.sizeBytes) {
+      return { path: null, reason: "the file there has changed since, so it was left alone" };
+    }
     // Its original home may be occupied now; never overwrite something to undo.
     const target = uniquePath(entry.from, (p) => this.pathExistsCI(p, entry.to));
-    if (this.pathExistsCI(target, entry.to)) return false;
+    if (this.pathExistsCI(target, entry.to)) return { path: null };
     await this.ensureParentFolder(target);
     await this.app.fileManager.renameFile(file, target);
-    return true;
+    return { path: target };
   }
 
   /**
@@ -1140,55 +1213,51 @@ export default class AttachmentManagerPlugin extends Plugin {
    * recycle bin is not addressable from a plugin, and a permanent delete leaves
    * nothing to find.
    */
-  private async restoreFromLocalTrash(entry: JournalEntry): Promise<boolean> {
+  private async restoreFromLocalTrash(entry: JournalEntry): Promise<RestoreOutcome> {
     const adapter = this.app.vault.adapter;
-    if (!adapter) return false;
-    const name = attachmentBaseName(entry.from);
-    const { stem, ext } = splitExtension(name);
+    if (!adapter) return { path: null };
 
     let listing: string[];
     try {
-      if (!(await adapter.exists(TRASH_DIR))) return false;
+      if (!(await adapter.exists(TRASH_DIR))) {
+        return { path: null, reason: "the vault's trash folder is gone" };
+      }
+      // `.files` excludes folders, so a directory sharing the name is never a candidate.
       listing = (await adapter.list(TRASH_DIR)).files;
     } catch {
-      return false;
+      return { path: null, reason: "the vault's trash could not be read" };
     }
 
-    const suffixed = new RegExp(`^${escapeRegExp(stem)}[ _-]?\\(?\\d+\\)?$`);
-    const candidates = listing.filter((p) => {
-      const base = attachmentBaseName(p);
-      if (base === name) return true;
-      const parts = splitExtension(base);
-      return parts.ext === ext && suffixed.test(parts.stem);
-    });
-    if (candidates.length === 0) return false;
-
-    // Prefer an exact size match, then the most recently modified.
-    let best: string | null = null;
-    let bestScore = -Infinity;
-    for (const candidate of candidates) {
-      let score = 0;
+    // Stat every name-plausible candidate, then let the pure selector decide.
+    // It identifies or refuses — it never picks a "best guess", because with
+    // identical names and sizes there is no evidence left to choose on and a
+    // wrong choice writes a stranger's bytes to a path the user trusts.
+    const wantedName = attachmentBaseName(entry.from);
+    const candidates: TrashCandidate[] = [];
+    for (const path of listing) {
+      if (!couldBeTrashedAs(attachmentBaseName(path), wantedName)) continue;
       try {
-        const stat = await adapter.stat(candidate);
-        if (stat) {
-          if (stat.size === entry.sizeBytes) score += 1e15;
-          score += stat.mtime;
+        const stat = await adapter.stat(path);
+        if (stat && stat.type === "file") {
+          candidates.push({ path, size: stat.size, mtime: stat.mtime });
         }
       } catch {
-        /* unreadable candidate: still usable, just least preferred */
-      }
-      if (score > bestScore) {
-        bestScore = score;
-        best = candidate;
+        /* unreadable: cannot be identified, so it cannot be a match */
       }
     }
-    if (!best) return false;
+
+    const outcome = selectTrashCandidate(candidates, {
+      from: entry.from,
+      sizeBytes: entry.sizeBytes,
+      mtime: entry.mtime,
+    });
+    if (!outcome.found) return { path: null, reason: explainOutcome(outcome.reason) };
 
     const target = uniquePath(entry.from, (p) => this.pathExistsCI(p));
-    if (this.pathExistsCI(target)) return false;
+    if (this.pathExistsCI(target)) return { path: null };
     await this.ensureParentFolder(target);
-    await adapter.rename(best, target);
-    return true;
+    await adapter.rename(outcome.found.path, target);
+    return { path: target };
   }
 
   /** Recreate the folder a restored file used to live in, if it has since gone. */
