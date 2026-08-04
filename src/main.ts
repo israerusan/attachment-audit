@@ -1304,7 +1304,37 @@ export default class AttachmentManagerPlugin extends Plugin {
       return { path: null, reason: "no free name was available at the original location" };
     }
     await this.ensureParentFolder(target);
-    await adapter.rename(outcome.found.path, target);
+
+    // Write through the VAULT, not the adapter.
+    //
+    // `adapter.rename` moves the bytes correctly but bypasses Obsidian's file
+    // index entirely, so the restored file exists on disk while `vault.getFiles()`
+    // — and therefore the very next scan — does not know it is there. The user
+    // sees a successful restore followed by a scan that cannot find the file,
+    // which reads as if the restore silently failed.
+    //
+    // `createBinary` returns a TFile, so the vault indexes it and fires `create`
+    // immediately. The cost is a read-plus-write instead of a move; correctness
+    // is worth it, and the alternative is a feature that looks broken every time
+    // it works.
+    let data: ArrayBuffer;
+    try {
+      data = await adapter.readBinary(outcome.found.path);
+    } catch {
+      return { path: null, reason: "the file in the trash could not be read" };
+    }
+    // Restore the original modification time so the file comes back as it was,
+    // rather than looking freshly created.
+    await this.app.vault.createBinary(target, data, entry.mtime ? { mtime: entry.mtime } : undefined);
+
+    // Only now remove the trash copy. Create-then-remove, never the reverse: if
+    // this fails the file simply exists in both places, whereas removing first
+    // and failing to create would lose it.
+    try {
+      await adapter.remove(outcome.found.path);
+    } catch (err) {
+      console.error(`Attachment Audit: restored ${target} but could not clear its trash copy`, err);
+    }
     return { path: target };
   }
 

@@ -1,6 +1,6 @@
 import { normalizePath, type App, type TFile } from "obsidian";
 import { ISSUE_TYPES } from "../../types";
-import { REPORT_FOLDER } from "../../product";
+import { PRODUCT_ID, REPORT_FOLDER } from "../../product";
 import type {
   AttachmentIssue,
   ScanConfig,
@@ -618,7 +618,16 @@ async function collectConfigSourceTexts(
   }
   try {
     if (await adapter.exists(`${configDir}/plugins`)) {
+      // Skip OUR OWN data file. It records every path we touch — ignored keys,
+      // excluded paths, and the cleanup journal — so reading it as a reference
+      // source makes this plugin's own bookkeeping suppress its own detection.
+      // A file restored from the trash was found "mentioned" by the journal
+      // entry describing its removal, and could never be flagged unused again.
+      // Same shape as the exported-reports bug: our output is not evidence about
+      // the vault.
+      const own = `${configDir}/plugins/${PRODUCT_ID}`;
       for (const dir of (await adapter.list(`${configDir}/plugins`)).folders) {
+        if (dir === own || dir.endsWith(`/${PRODUCT_ID}`)) continue;
         targets.push(`${dir}/data.json`);
       }
     }

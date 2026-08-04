@@ -48,3 +48,34 @@ assert.ok(isMentionSourcePath("Notes/NOTE.MD"));
 assert.ok(isMentionSourcePath("Theme/Custom.CSS"));
 
 console.log("mentionBasis tests passed");
+
+// --- Our own data file must never be a reference source --------------------
+// The scan reads `.obsidian/plugins/*/data.json`, because other plugins
+// legitimately reference vault images there. But OUR data.json records every
+// path we touch — ignored keys, excluded paths, and the cleanup journal — so
+// reading it made this plugin's own bookkeeping suppress its own detection: a
+// file restored from the trash was "mentioned" by the journal entry describing
+// its removal, and could never be flagged unused again.
+//
+// Verified in a real vault: after trashing and restoring, the filenames appeared
+// twice each in our own data.json and the file stopped being reported.
+import { PRODUCT_ID } from "../src/product";
+
+assert.strictEqual(PRODUCT_ID, "attachment-audit", "the id used to skip our own data file");
+// The skip is by directory name, so it must match what Obsidian installs to.
+const ownDir = `.obsidian/plugins/${PRODUCT_ID}`;
+assert.ok(ownDir.endsWith(`/${PRODUCT_ID}`), "the endsWith guard matches a real install path");
+// A DIFFERENT plugin whose id merely contains ours must STILL be read — its
+// data.json can reference vault images just like any other plugin's.
+assert.strictEqual(
+  `.obsidian/plugins/${PRODUCT_ID}-extras`.endsWith(`/${PRODUCT_ID}`),
+  false,
+  "a longer id is a different plugin"
+);
+assert.strictEqual(
+  `.obsidian/plugins/my-${PRODUCT_ID}`.endsWith(`/${PRODUCT_ID}`),
+  false,
+  "a prefixed id is a different plugin"
+);
+
+console.log("own-data-file exclusion tests passed");

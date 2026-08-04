@@ -2,6 +2,19 @@
 
 All notable changes to Attachment Audit are documented here. This project adheres to [Keep a Changelog](https://keepachangelog.com/) and [Semantic Versioning](https://semver.org/).
 
+## [1.2.1] - 2026-08-04
+
+Two fixes found by testing against a real vault rather than by review.
+
+### Fixed
+
+- **Attachment Audit no longer suppresses its own detection.** Since 1.1.0 the scan has read `.obsidian/plugins/*/data.json`, because other plugins legitimately reference vault images there — but that included *this plugin's own* data file, which records every path it touches (ignored results, excluded paths, and from 1.2.0 the cleanup journal). The reference scan found those filenames and concluded the files were still in use, so they were never reported again. Most visible after restoring something from the history: the file came back but stopped appearing in scans. Our own bookkeeping is not evidence about your vault, and is now excluded.
+- **A restored file is visible to Obsidian immediately.** Restoring from the trash moved the bytes with a raw filesystem call that bypassed Obsidian's file index, so the file was on disk while the very next scan could not see it. Files are now written back through the vault, and the original modification time is preserved.
+
+### Verified
+
+The `.trash` layout, collision naming and restore round trip were tested against a real vault for the first time. Trashing preserves file contents and flattens folder structure, and restoring two same-named files from different folders returns each to its own folder with its own content.
+
 ## [1.2.0] - 2026-08-04
 
 Cleanup history — see everything Attachment Audit changed, and put it back.
