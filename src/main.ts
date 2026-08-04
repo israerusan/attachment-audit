@@ -1134,6 +1134,25 @@ export default class AttachmentManagerPlugin extends Plugin {
     this.restoringBatches.add(batchId);
     const landedAt: string[] = [];
     const reasons: string[] = [];
+    // Walk `.trash` ONCE for the whole batch. Listing it per entry made a
+    // 500-file restore do 500 recursive walks of a directory holding everything
+    // the user has ever deleted.
+    let trashListing: string[] = [];
+    if (batch.op === "trash") {
+      const adapter = this.app.vault.adapter;
+      try {
+        if (adapter && (await adapter.exists(TRASH_DIR))) {
+          trashListing = await this.listTrashRecursive(adapter);
+        }
+      } catch (err) {
+        console.error("Attachment Audit: could not read the vault's trash", err);
+      }
+      if (trashListing.length === 0) {
+        this.restoringBatches.delete(batchId);
+        new Notice(`${PRODUCT_NAME}: the vault's trash is empty or unreadable — nothing to put back.`);
+        return { restored, failed };
+      }
+    }
     // Per-entry results, so re-running a partial restore does not search for —
     // or pull a second file out of the trash for — an entry already put back.
     const restoredTo = new Map<string, string>();
@@ -1148,7 +1167,7 @@ export default class AttachmentManagerPlugin extends Plugin {
         try {
           const outcome =
             batch.op === "trash"
-              ? await this.restoreFromLocalTrash(entry)
+              ? await this.restoreFromLocalTrash(entry, trashListing)
               : await this.reverseMove(entry);
           if (outcome.path) {
             restored.push(entry.from);
@@ -1239,19 +1258,12 @@ export default class AttachmentManagerPlugin extends Plugin {
    * recycle bin is not addressable from a plugin, and a permanent delete leaves
    * nothing to find.
    */
-  private async restoreFromLocalTrash(entry: JournalEntry): Promise<RestoreOutcome> {
+  private async restoreFromLocalTrash(
+    entry: JournalEntry,
+    listing: readonly string[]
+  ): Promise<RestoreOutcome> {
     const adapter = this.app.vault.adapter;
     if (!adapter) return { path: null, reason: "the vault storage is unavailable" };
-
-    let listing: string[];
-    try {
-      if (!(await adapter.exists(TRASH_DIR))) {
-        return { path: null, reason: "the vault's trash folder is gone" };
-      }
-      listing = await this.listTrashRecursive(adapter);
-    } catch {
-      return { path: null, reason: "the vault's trash could not be read" };
-    }
 
     // Stat every name-plausible candidate, then hash the ones whose size matches
     // and let the pure selector decide. It identifies or refuses — it never picks
