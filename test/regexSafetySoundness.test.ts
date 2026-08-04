@@ -35,6 +35,9 @@ const CORPUS: string[] = [
   "́", // combining acute
 ];
 
+/** Reduced corpus for the two-character sweep, kept small enough to be quadratic. */
+const PAIR_CORPUS = ["a", "b", "A", "0", "9", "-", ".", BACKSLASH, "é", " ", "日"];
+
 /** Every branch of a top-level alternation inside a single leading group. */
 function splitBranches(pattern: string): string[] | null {
   const open = pattern.indexOf("(");
@@ -71,7 +74,12 @@ function splitBranches(pattern: string): string[] | null {
   return null;
 }
 
-/** True when both branches can match the same single character from the corpus. */
+/**
+ * True when both branches can match the same string. Tries every single
+ * character in the corpus, then every two-character combination over a reduced
+ * corpus — a multi-atom branch can overlap another only on a longer string, and
+ * checking one character would miss it.
+ */
 function branchesOverlap(a: string, b: string): boolean {
   let reA: RegExp;
   let reB: RegExp;
@@ -83,12 +91,16 @@ function branchesOverlap(a: string, b: string): boolean {
   } catch {
     return false; // not independently compilable — not a claim the screen made
   }
-  for (const ch of CORPUS) {
-    let hitA = false;
-    let hitB = false;
-    try { hitA = reA.test(ch); } catch { return false; }
-    try { hitB = reB.test(ch); } catch { return false; }
-    if (hitA && hitB) return true;
+  const bothMatch = (s: string): boolean => {
+    try {
+      return reA.test(s) && reB.test(s);
+    } catch {
+      return false;
+    }
+  };
+  for (const ch of CORPUS) if (bothMatch(ch)) return true;
+  for (const x of PAIR_CORPUS) {
+    for (const y of PAIR_CORPUS) if (bothMatch(x + y)) return true;
   }
   return false;
 }
@@ -105,6 +117,13 @@ assert.ok(branchesOverlap(" ", BACKSLASH + "s"), "\\s includes U+00A0");
 assert.ok(branchesOverlap("a", "A"), "the i flag makes these one branch");
 assert.ok(branchesOverlap("é", "É"));
 assert.ok(branchesOverlap("a", "[a-z]"));
+// A shorthand misaligns item boundaries, and the reversed range that follows
+// contributes nothing — so the model dropped `a` while the engine still matches it.
+assert.ok(branchesOverlap("a", "[" + BACKSLASH + "d-a-0]"), "reversed range after a shorthand");
+assert.ok(branchesOverlap("é", "[" + BACKSLASH + "w-é-0]"));
+// Two-character overlap: single-character probing alone would miss this.
+assert.ok(branchesOverlap("ab", "[a-z][a-z]"), "multi-atom branches overlap on 2 chars");
+assert.ok(!branchesOverlap("ab", "[0-9][0-9]"));
 // ...and must NOT cry wolf on genuinely disjoint branches.
 assert.ok(!branchesOverlap("a", "b"));
 assert.ok(!branchesOverlap(BACKSLASH + "w", "-"), "\\w does not match a hyphen");
@@ -132,6 +151,13 @@ const ATOMS = [
   "[a-z]", "[0-9]", "[abc]", "[" + BACKSLASH + "w]", "[" + BACKSLASH + "d]",
   "[" + BACKSLASH + ".-o]", "[a-" + BACKSLASH + "d]", "[" + BACKSLASH + "x41]",
   "[" + BACKSLASH + "]]", "[^a]", "[]",
+  // A shorthand followed by a REVERSED range. A shorthand misaligns this
+  // parser's item boundaries against the engine's (Annex B reads the whole thing
+  // as a union), and a reversed range then contributes nothing — the one
+  // direction that makes the proof unsafe. The atom set previously held nothing
+  // long enough to express this, so the sweep could not reach it.
+  "[" + BACKSLASH + "d-a-0]", "[" + BACKSLASH + "w-é-0]", "[" + BACKSLASH + "d-a--]",
+  "[" + BACKSLASH + "w-日-0]", "[" + BACKSLASH + "d-a-z]", "[z-a]",
   "a?", "a*", "a+", "a{0}", "a{1}", "a{2,4}", "a{0,1}",
 ];
 
@@ -141,11 +167,17 @@ let unsound = 0;
 const failures: string[] = [];
 
 for (let trial = 0; trial < 6000; trial++) {
-  const a = ATOMS[rnd(ATOMS.length)] + (rnd(3) === 0 ? ATOMS[rnd(ATOMS.length)] : "");
-  const b = ATOMS[rnd(ATOMS.length)] + (rnd(3) === 0 ? ATOMS[rnd(ATOMS.length)] : "");
+  // TWO to FOUR branches. The generator used to emit exactly two, so the
+  // screen's pairwise loop was never exercised beyond the adjacent pair — and a
+  // defect at positions 1 and 3 would have gone unseen.
+  const branchCount = 2 + rnd(3);
+  const parts: string[] = [];
+  for (let k = 0; k < branchCount; k++) {
+    parts.push(ATOMS[rnd(ATOMS.length)] + (rnd(3) === 0 ? ATOMS[rnd(ATOMS.length)] : ""));
+  }
   const open = rnd(2) === 0 ? "(" : "(?:";
   const quant = ["+", "*", "{1,20}"][rnd(3)];
-  const pattern = `^${open}${a}|${b})${quant}$`;
+  const pattern = `^${open}${parts.join("|")})${quant}$`;
 
   try { new RegExp(pattern, "i"); } catch { continue; } // not a valid regex
   generated++;
@@ -154,8 +186,15 @@ for (let trial = 0; trial < 6000; trial++) {
   accepted++;
 
   const branches = splitBranches(pattern);
-  if (!branches || branches.length !== 2) continue;
-  if (branchesOverlap(branches[0], branches[1])) {
+  if (!branches || branches.length < 2) continue;
+  // EVERY pair, not just the first two.
+  let overlapped = false;
+  for (let x = 0; x < branches.length && !overlapped; x++) {
+    for (let y = x + 1; y < branches.length && !overlapped; y++) {
+      if (branchesOverlap(branches[x], branches[y])) overlapped = true;
+    }
+  }
+  if (overlapped) {
     unsound++;
     if (failures.length < 8) failures.push(pattern);
   }

@@ -289,7 +289,17 @@ function firstAtomCharset(alt: string): Set<number> | null {
         // An escape as the HIGH endpoint: `[a-\d]`. `charCodeAt` would read the
         // backslash (92) and silently produce an empty or wrong range.
         if (body[i + 2] === "\\") return null;
-        for (let v = body.charCodeAt(i); v <= body.charCodeAt(i + 2); v++) set.add(v);
+        const lo = body.charCodeAt(i);
+        const hi = body.charCodeAt(i + 2);
+        // A REVERSED range contributes nothing, which under-approximates — the
+        // one direction that makes the disjointness proof unsafe. It is reachable
+        // because a shorthand earlier in the class misaligns our item boundaries
+        // against the engine's: for `[\d-a-0]` this parser reads `a-0` as a range
+        // (97 > 48, so empty, dropping `a` entirely) while the engine reads the
+        // whole thing as a union per Annex B. `^(?:[\d-a-0]|a)+$` was accepted on
+        // that basis: 3.8 s at 26 characters, 19.6 s at 28, no result at 30.
+        if (lo > hi) return null;
+        for (let v = lo; v <= hi; v++) set.add(v);
         i += 2;
         continue;
       }
