@@ -164,26 +164,59 @@ function repeatsMoreThanOnceAt(pattern: string, i: number): boolean {
   return range !== null && range.max > 1;
 }
 
-/** ASCII code points matched by a shorthand class, used for disjointness tests. */
+/**
+ * The complete set of characters a shorthand class matches, or `null` when that
+ * set cannot be represented as a finite list of ASCII code points.
+ *
+ * ONLY `\w` and `\d` are modellable. Both are exactly ASCII by definition
+ * ([A-Za-z0-9_] and [0-9]), so enumerating 0-127 captures them fully.
+ *
+ * The others are deliberately unmodellable, and getting this wrong was a real
+ * hang:
+ *  - `\W`, `\D`, `\S` are COMPLEMENTS, so they match every non-ASCII character.
+ *    Enumerating only 0-127 made `^(\S|é)+$` look like two disjoint branches
+ *    when the engine sees one — measured 1,983 ms at 29 characters, and a sweep
+ *    of U+0080-U+2FFF found 36,463 such accepted patterns.
+ *  - `\s` is not ASCII either: it includes U+00A0, U+2028, U+FEFF and the
+ *    U+2000-U+200A range.
+ *
+ * Returning `null` makes the caller treat the alternation as ambiguous, which is
+ * the safe direction: it can only cause a pattern to be refused, never accepted.
+ */
 function shorthandCharset(letter: string): Set<number> | null {
   const set = new Set<number>();
-  const add = (pred: (c: number) => boolean, negate: boolean): Set<number> => {
-    for (let c = 0; c < 128; c++) if (pred(c) !== negate) set.add(c);
+  const addWhere = (pred: (c: number) => boolean): Set<number> => {
+    for (let c = 0; c < 128; c++) if (pred(c)) set.add(c);
     return set;
   };
   const isWord = (c: number): boolean =>
     (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95;
   const isDigit = (c: number): boolean => c >= 48 && c <= 57;
-  const isSpace = (c: number): boolean => c === 32 || (c >= 9 && c <= 13);
   switch (letter) {
-    case "w": return add(isWord, false);
-    case "W": return add(isWord, true);
-    case "d": return add(isDigit, false);
-    case "D": return add(isDigit, true);
-    case "s": return add(isSpace, false);
-    case "S": return add(isSpace, true);
-    default: return null;
+    case "w": return addWhere(isWord);
+    case "d": return addWhere(isDigit);
+    default: return null; // \W \D \S \s and every other escape: not ASCII-bounded
   }
+}
+
+/**
+ * Index of the `]` that closes a character class starting at 0, honouring
+ * backslash escapes, or -1. `indexOf("]")` was wrong: for `[\]]` it found the
+ * ESCAPED bracket, truncating the class body to a lone backslash. The parser
+ * then read past the end, added `NaN` to the charset, and `String.fromCodePoint`
+ * threw an uncaught `RangeError` — which escaped all three call sites, aborting
+ * the scan and breaking the settings tab so the offending pattern could not even
+ * be deleted.
+ */
+function classTerminator(alt: string): number {
+  for (let k = 1; k < alt.length; k++) {
+    if (alt[k] === "\\") {
+      k++; // skip whatever is escaped, including `]` and `\`
+      continue;
+    }
+    if (alt[k] === "]") return k;
+  }
+  return -1;
 }
 
 /**
@@ -208,16 +241,29 @@ function firstAtomCharset(alt: string): Set<number> | null {
   }
 
   if (c === "[") {
-    const close = alt.indexOf("]", 1);
+    const close = classTerminator(alt);
     if (close === -1) return null;
     const body = alt.slice(1, close);
     if (body.startsWith("^")) return null; // negated classes: don't guess
+    if (body.length === 0) return null; // `[]` matches nothing — not worth modelling
     const set = new Set<number>();
     for (let i = 0; i < body.length; i++) {
       if (body[i] === "\\") {
-        const shorthand = shorthandCharset(body[i + 1]);
-        if (shorthand) for (const v of shorthand) set.add(v);
-        else set.add(body.charCodeAt(i + 1));
+        const next = body[i + 1];
+        if (next === undefined) return null; // trailing backslash
+        const shorthand = shorthandCharset(next);
+        if (shorthand) {
+          for (const v of shorthand) set.add(v);
+          i++;
+          continue;
+        }
+        // An alphanumeric escape we did not model is a control or numeric
+        // sequence (`\x41`, `A`, `\t`, `\cA`, `\S`) whose VALUE is not the
+        // letter itself. Treating it as the literal letter attributed it to the
+        // wrong code point and cleared genuinely overlapping alternations:
+        // `^(?:[\x41]|A)+$` was accepted while the engine sees `(A|A)+`.
+        if (/[a-zA-Z0-9]/.test(next)) return null;
+        set.add(body.charCodeAt(i + 1)); // escaped punctuation is its own literal
         i++;
         continue;
       }
@@ -228,7 +274,7 @@ function firstAtomCharset(alt: string): Set<number> | null {
       }
       set.add(body.charCodeAt(i));
     }
-    return set;
+    return set.size > 0 ? set : null;
   }
 
   // A nested group, or `.` — too broad or too complex to model.
@@ -247,6 +293,11 @@ function firstAtomCharset(alt: string): Set<number> | null {
  * final ς) that both uppercase to Σ, so lowercasing would judge them distinct.
  */
 function canonicalize(c: number): number {
+  // Defensive: `String.fromCodePoint` throws RangeError on NaN or an
+  // out-of-range value. A parser bug upstream once fed it NaN and the exception
+  // escaped every call site, aborting the scan. Screening a pattern must never
+  // throw — the worst it may do is refuse the pattern.
+  if (!Number.isInteger(c) || c < 0 || c > 0x10ffff) return -1;
   const upper = String.fromCodePoint(c).toUpperCase();
   if ([...upper].length !== 1) return c; // e.g. ß -> SS
   const u = upper.codePointAt(0) ?? c;
@@ -312,6 +363,20 @@ function alternativesAmbiguous(body: string, breaks: number[], bodyStart: number
  * and for patterns that simply will not compile.
  */
 export function checkRegexSafety(pattern: string): RegexSafetyVerdict {
+  // A bug in the screen must never take the scan down with it. All three callers
+  // invoke this outside their own try/catch, so an exception here aborted the
+  // whole scan mid-way and broke the settings tab — leaving the user unable to
+  // delete the pattern that caused it, on every restart. Failing closed is
+  // always available and always safe.
+  try {
+    return screen(pattern);
+  } catch (err) {
+    console.error("Attachment Audit: could not screen a pattern, refusing it", err);
+    return { safe: false, reason: "This pattern could not be checked, so it is not being used." };
+  }
+}
+
+function screen(pattern: string): RegexSafetyVerdict {
   if (pattern.length > MAX_PATTERN_LENGTH) {
     return { safe: false, reason: `Pattern is longer than ${MAX_PATTERN_LENGTH} characters.` };
   }

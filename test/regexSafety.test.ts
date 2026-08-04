@@ -224,3 +224,48 @@ assert.ok(!safe("^(?:aa?)+$"));
 assert.ok(!safe("^(?:a|ab)+$"), "overlapping branches inside a non-capturing group");
 
 console.log("regexSafety zero-repeat + group-prefix tests passed");
+
+// --- Character-class parsing must honour escapes ---------------------------
+// `indexOf("]")` found the ESCAPED bracket in `[\\]]`, truncating the class body
+// to a lone backslash. The parser then read past the end, added NaN to the
+// charset, and String.fromCodePoint threw an uncaught RangeError that escaped
+// ALL THREE call sites — aborting the scan and breaking the settings tab, so the
+// offending pattern could not even be deleted. It recurred on every restart.
+for (const p of ["^([\\]]|a)+$", "([\\]]|a)", "^([\\[\\]]|-)+$", "^(?:[\\]]|a)+$"]) {
+  assert.doesNotThrow(() => checkRegexSafety(p), `must not throw: ${p}`);
+  // `]` and `a` really are disjoint, so these are correctly ACCEPTED (0ms).
+  assert.ok(safe(p), `escaped-bracket class is genuinely disjoint: ${p}`);
+}
+
+// Screening must NEVER throw, whatever it is handed.
+for (const p of ["[", "[\\", "[]", "[^]", "(", ")", "(?", "(?<", "a{", "a{x}", "a{2", "*", "+", "?", ""]) {
+  assert.doesNotThrow(() => checkRegexSafety(p), `screening must not throw on: ${JSON.stringify(p)}`);
+}
+
+// --- In-class escapes must not be read as the literal letter ---------------
+// `[\\x41]` is `A`, not `x`. Treating it as the letter attributed it to the
+// wrong code point and cleared genuinely overlapping alternations:
+// `^(?:[\\x41]|A)+$` was accepted while the engine sees `(A|A)+` — 1,930 ms.
+assert.ok(!safe("^(?:[\\x41]|A)+$"));
+assert.ok(!safe("^(?:[\\u0041]|A)+$"));
+assert.ok(!safe("^(?:[\\t]|" + String.fromCharCode(9) + ")+$"));
+assert.ok(!safe("^(?:[\\cA]|a)+$"));
+// ...but escaped PUNCTUATION really is its own literal, so it stays modellable.
+assert.ok(safe("^([\\-]|a)+$"));
+assert.ok(safe("^([\\.]|a)+$"));
+
+// --- Negated shorthands match NON-ASCII, so they cannot be modelled --------
+// `\\W`, `\\D`, `\\S` are complements and match every character above 0x7F;
+// `\\s` includes U+00A0, U+2028, U+FEFF. Enumerating only 0-127 made
+// `^(?:\\S|é)+$` look like two disjoint branches when the engine sees one —
+// measured 1,983 ms at 29 chars, with 36,463 such accepted patterns in a sweep.
+assert.ok(!safe("^(?:\\S|é)+$"));
+assert.ok(!safe("^(?:\\W|é)+$"));
+assert.ok(!safe("^(?:\\D|é)+$"));
+assert.ok(!safe("^([\\W]|é)+$"));
+assert.ok(!safe("^(?:\\s|" + String.fromCharCode(0xa0) + ")+$"), "\s includes U+00A0");
+// The two POSITIVE shorthands are exactly ASCII by definition and stay modellable.
+assert.ok(safe("^(\\w|-)+$"), "\w is exactly [A-Za-z0-9_]");
+assert.ok(safe("^(\\d|-)+$"), "\d is exactly [0-9]");
+
+console.log("regexSafety class-parsing + shorthand tests passed");
