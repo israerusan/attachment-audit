@@ -165,156 +165,61 @@ function repeatsMoreThanOnceAt(pattern: string, i: number): boolean {
 }
 
 /**
- * The complete set of characters a shorthand class matches, or `null` when that
- * set cannot be represented as a finite list of ASCII code points.
+ * The single character an alternative's FIRST atom matches, or `null` when that
+ * cannot be established trivially. Two alternatives whose first atoms cannot
+ * match the same character can never both consume the same input, so the
+ * alternation is unambiguous and safe to repeat.
  *
- * ONLY `\w` and `\d` are modellable. Both are exactly ASCII by definition
- * ([A-Za-z0-9_] and [0-9]), so enumerating 0-127 captures them fully.
+ * This models ONE thing: a plain literal character. Anything else — a class, any
+ * escape, a group, a metacharacter — returns `null`, which makes the caller treat
+ * the alternation as ambiguous and refuse to repeat it.
  *
- * The others are deliberately unmodellable, and getting this wrong was a real
- * hang:
- *  - `\W`, `\D`, `\S` are COMPLEMENTS, so they match every non-ASCII character.
- *    Enumerating only 0-127 made `^(\S|é)+$` look like two disjoint branches
- *    when the engine sees one — measured 1,983 ms at 29 characters, and a sweep
- *    of U+0080-U+2FFF found 36,463 such accepted patterns.
- *  - `\s` is not ASCII either: it includes U+00A0, U+2028, U+FEFF and the
- *    U+2000-U+200A range.
+ * That is a deliberate retreat. This function previously modelled character
+ * classes, ranges and shorthand escapes so that `^(\w|-)+$` would be accepted,
+ * and it was WRONG SEVEN TIMES, every time in the unsafe direction: an
+ * under-approximated charset proves overlapping branches disjoint, and the
+ * accepted pattern then freezes the renderer for minutes. The catalogue:
+ * negated shorthands modelled as ASCII-only (`\S` does match `é`), in-class
+ * escapes read as the literal letter (`[A]` is `A`, not `x`), an escaped `]`
+ * truncating the class and throwing a RangeError, escaped range endpoints, and
+ * reversed ranges silently contributing nothing.
  *
- * Returning `null` makes the caller treat the alternation as ambiguous, which is
- * the safe direction: it can only cause a pattern to be refused, never accepted.
+ * The feature was never worth it: NONE of the ten shipped default patterns, and
+ * none of the realistic user rules surveyed, contains an alternation directly
+ * under a repeat. The cost of the retreat is that `^(\w|-)+$` is refused — and
+ * its natural spelling `^[\w-]+$` is not an alternation at all, so it is
+ * unaffected. What remains is one literal character compared under the `i` flag's
+ * canonicalization, which is small enough to be obviously correct.
  */
-function shorthandCharset(letter: string): Set<number> | null {
-  const set = new Set<number>();
-  const addWhere = (pred: (c: number) => boolean): Set<number> => {
-    for (let c = 0; c < 128; c++) if (pred(c)) set.add(c);
-    return set;
-  };
-  const isWord = (c: number): boolean =>
-    (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95;
-  const isDigit = (c: number): boolean => c >= 48 && c <= 57;
-  switch (letter) {
-    case "w": return addWhere(isWord);
-    case "d": return addWhere(isDigit);
-    default: return null; // \W \D \S \s and every other escape: not ASCII-bounded
-  }
-}
-
 /**
- * Index of the `]` that closes a character class starting at 0, honouring
- * backslash escapes, or -1. `indexOf("]")` was wrong: for `[\]]` it found the
- * ESCAPED bracket, truncating the class body to a lone backslash. The parser
- * then read past the end, added `NaN` to the charset, and `String.fromCodePoint`
- * threw an uncaught `RangeError` — which escaped all three call sites, aborting
- * the scan and breaking the settings tab so the offending pattern could not even
- * be deleted.
+ * Characters that start something this function refuses to model: a backslash
+ * escape, a class, a group, or a quantifier/anchor that means the leading atom is
+ * not a plain literal. Built from a list rather than a string literal so no
+ * amount of escaping confusion can quietly drop the backslash from it.
  */
-function classTerminator(alt: string): number {
-  for (let k = 1; k < alt.length; k++) {
-    if (alt[k] === "\\") {
-      k++; // skip whatever is escaped, including `]` and `\`
-      continue;
-    }
-    if (alt[k] === "]") return k;
-  }
-  return -1;
-}
+const UNMODELLABLE_FIRST_CHARS: ReadonlySet<string> = new Set([
+  String.fromCharCode(92), // backslash
+  "[",
+  "]",
+  "(",
+  ")",
+  "{",
+  "}",
+  "*",
+  "+",
+  "?",
+  ".",
+  "^",
+  "$",
+  "|",
+]);
 
-/**
- * The set of ASCII characters an alternative's FIRST atom can match, or null when
- * we cannot model it. Two alternatives whose first atoms cannot match the same
- * character can never both consume the same input, so the alternation is
- * unambiguous and safe to repeat — that is what keeps sensible patterns like
- * `^(\w|-)+$` and `^(img|dsc|pxl)+$` usable.
- */
 function firstAtomCharset(alt: string): Set<number> | null {
-  if (alt.length === 0) return null; // an empty alternative under `+` loops forever
   const c = alt[0];
-
-  if (c === "\\") {
-    const next = alt[1];
-    if (next === undefined) return null;
-    const shorthand = shorthandCharset(next);
-    if (shorthand) return shorthand;
-    // An escaped literal (\., \-, \/ …). Control escapes are not modelled.
-    if (/[a-zA-Z0-9]/.test(next)) return null;
-    return new Set([next.charCodeAt(0)]);
-  }
-
-  if (c === "[") {
-    const close = classTerminator(alt);
-    if (close === -1) return null;
-    const body = alt.slice(1, close);
-    if (body.startsWith("^")) return null; // negated classes: don't guess
-    if (body.length === 0) return null; // `[]` matches nothing — not worth modelling
-
-    // A RANGE whose endpoint is an escape is never modelled. That combination is
-    // where this parser kept going wrong, and always in the unsafe direction — it
-    // UNDER-approximates the charset, so branches that really overlap are proved
-    // disjoint and an exponential pattern is accepted:
-    //
-    //   [\.-o]  read as {'.', '-', 'o'}   instead of the range 0x2E-0x6F
-    //   [a-\d]  read as {'d'}             instead of 'a' plus every digit
-    //
-    // `^(?:0|[\.-o])+$` was accepted on that basis and takes 495 ms at 26
-    // characters; the wider `^(?:[\!-~]|Q)+$` takes 64 SECONDS at 30. A sweep of
-    // 83,202 accepted patterns found 135 provably-overlapping ones, and every
-    // single one had an escaped range endpoint.
-    //
-    // An escaped hyphen (`[\-]`) is a LITERAL, not a range operator, so it stays
-    // modellable — the check below is for a `-` in range position specifically.
-    const set = new Set<number>();
-    for (let i = 0; i < body.length; i++) {
-      if (body[i] === "\\") {
-        const next = body[i + 1];
-        if (next === undefined) return null; // trailing backslash
-        const shorthand = shorthandCharset(next);
-        if (shorthand) {
-          for (const v of shorthand) set.add(v);
-          i++;
-          continue;
-        }
-        // An alphanumeric escape we did not model is a control or numeric
-        // sequence (`\x41`, `A`, `\t`, `\cA`, `\S`) whose VALUE is not the
-        // letter itself. Treating it as the literal letter attributed it to the
-        // wrong code point and cleared genuinely overlapping alternations:
-        // `^(?:[\x41]|A)+$` was accepted while the engine sees `(A|A)+`.
-        if (/[a-zA-Z0-9]/.test(next)) return null;
-        // An escaped literal used as the LOW endpoint of a range: `[\.-o]`.
-        if (body[i + 2] === "-" && body[i + 3] !== undefined) return null;
-        set.add(body.charCodeAt(i + 1)); // escaped punctuation is its own literal
-        i++;
-        continue;
-      }
-      if (body[i + 1] === "-" && body[i + 2] !== undefined && body[i + 2] !== "]") {
-        // An escape as the HIGH endpoint: `[a-\d]`. `charCodeAt` would read the
-        // backslash (92) and silently produce an empty or wrong range.
-        if (body[i + 2] === "\\") return null;
-        const lo = body.charCodeAt(i);
-        const hi = body.charCodeAt(i + 2);
-        // A REVERSED range contributes nothing, which under-approximates — the
-        // one direction that makes the disjointness proof unsafe. It is reachable
-        // because a shorthand earlier in the class misaligns our item boundaries
-        // against the engine's: for `[\d-a-0]` this parser reads `a-0` as a range
-        // (97 > 48, so empty, dropping `a` entirely) while the engine reads the
-        // whole thing as a union per Annex B. `^(?:[\d-a-0]|a)+$` was accepted on
-        // that basis: 3.8 s at 26 characters, 19.6 s at 28, no result at 30.
-        if (lo > hi) return null;
-        for (let v = lo; v <= hi; v++) set.add(v);
-        i += 2;
-        continue;
-      }
-      set.add(body.charCodeAt(i));
-    }
-    return set.size > 0 ? set : null;
-  }
-
-  // A nested group, or `.` — too broad or too complex to model.
-  if (c === "(" || c === ".") return null;
-  // A quantifier or anchor leading an alternative is not a plain atom.
-  if ("*+?{}|^$".includes(c)) return null;
-  return new Set([c.charCodeAt(0)]);
+  if (c === undefined) return null; // empty alternative: `(a|)+` loops forever
+  if (UNMODELLABLE_FIRST_CHARS.has(c)) return null;
+  return new Set([c.codePointAt(0) as number]);
 }
-
 /**
  * Fold one code point exactly the way the `i` flag does — ECMAScript's
  * Canonicalize: uppercase it, keep the result only if it is a single character

@@ -142,9 +142,15 @@ function rnd(n: number): number {
   return Math.abs(seed) % n;
 }
 
-/** Atoms chosen to include every shape that has previously broken the model. */
+/**
+ * Atoms chosen to include every shape that has previously broken the model, PLUS
+ * plenty of plain literals — since the retreat to literal-only first atoms, a
+ * class or escape leading a branch is simply refused, so a corpus made only of
+ * those would exercise almost nothing on the accepted path.
+ */
 const ATOMS = [
-  "a", "b", "0", "-", ".", "é", "日",
+  "a", "b", "c", "x", "y", "z", "A", "B", "Z", "0", "1", "9",
+  "img", "dsc", "pxl", "ab", "aa", "xy", "a1", "-", "_", ".", "é", "É", "日", " ",
   BACKSLASH + "w", BACKSLASH + "d", BACKSLASH + "s",
   BACKSLASH + "W", BACKSLASH + "D", BACKSLASH + "S",
   BACKSLASH + ".", BACKSLASH + "-", BACKSLASH + "]",

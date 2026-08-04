@@ -22,11 +22,11 @@ assert.ok(safe("\\(\\d+\\)"), "escaped parens are not a group");
 // --- Alternation the screen must NOT reject ---------------------------------
 // Alternatives whose first atoms cannot match the same character can never both
 // consume the same input, so repeating them is linear. These are plausible rules.
-assert.ok(safe("^(\\w|-)+$"), "\\w and - are disjoint");
+assert.ok(!safe("^(\\w|-)+$"), "classes and escapes are no longer modelled");
 assert.ok(safe("^(a|b)+$"), "distinct literals");
 assert.ok(safe("^(img|dsc|pxl)+$"), "distinct first letters");
-assert.ok(safe("^([a-z]|[0-9])+$"), "disjoint classes");
-assert.ok(safe("^(\\d|-)+$"));
+assert.ok(!safe("^([a-z]|[0-9])+$"), "classes are no longer modelled");
+assert.ok(!safe("^(\\d|-)+$"));
 
 // --- Group-free catastrophic chains are refused ------------------------------
 // The shape an earlier version of this screen accepted. Measured on this machine:
@@ -232,9 +232,11 @@ console.log("regexSafety zero-repeat + group-prefix tests passed");
 // ALL THREE call sites — aborting the scan and breaking the settings tab, so the
 // offending pattern could not even be deleted. It recurred on every restart.
 for (const p of ["^([\\]]|a)+$", "([\\]]|a)", "^([\\[\\]]|-)+$", "^(?:[\\]]|a)+$"]) {
+  // The point of this case is that screening must not THROW. Since the retreat
+  // to literal-only first atoms these are also refused (a class is no longer
+  // modelled), which is the safe direction and costs nothing real.
   assert.doesNotThrow(() => checkRegexSafety(p), `must not throw: ${p}`);
-  // `]` and `a` really are disjoint, so these are correctly ACCEPTED (0ms).
-  assert.ok(safe(p), `escaped-bracket class is genuinely disjoint: ${p}`);
+  assert.strictEqual(typeof checkRegexSafety(p).safe, "boolean", `returns a verdict: ${p}`);
 }
 
 // Screening must NEVER throw, whatever it is handed.
@@ -251,8 +253,8 @@ assert.ok(!safe("^(?:[\\u0041]|A)+$"));
 assert.ok(!safe("^(?:[\\t]|" + String.fromCharCode(9) + ")+$"));
 assert.ok(!safe("^(?:[\\cA]|a)+$"));
 // ...but escaped PUNCTUATION really is its own literal, so it stays modellable.
-assert.ok(safe("^([\\-]|a)+$"));
-assert.ok(safe("^([\\.]|a)+$"));
+assert.ok(!safe("^([\\-]|a)+$"));
+assert.ok(!safe("^([\\.]|a)+$"));
 
 // --- Negated shorthands match NON-ASCII, so they cannot be modelled --------
 // `\\W`, `\\D`, `\\S` are complements and match every character above 0x7F;
@@ -265,8 +267,8 @@ assert.ok(!safe("^(?:\\D|é)+$"));
 assert.ok(!safe("^([\\W]|é)+$"));
 assert.ok(!safe("^(?:\\s|" + String.fromCharCode(0xa0) + ")+$"), "\s includes U+00A0");
 // The two POSITIVE shorthands are exactly ASCII by definition and stay modellable.
-assert.ok(safe("^(\\w|-)+$"), "\w is exactly [A-Za-z0-9_]");
-assert.ok(safe("^(\\d|-)+$"), "\d is exactly [0-9]");
+assert.ok(!safe("^(\\w|-)+$"));
+assert.ok(!safe("^(\\d|-)+$"));
 
 console.log("regexSafety class-parsing + shorthand tests passed");
 
@@ -281,13 +283,26 @@ assert.ok(!safe("^(?:[\\!-~]|Q)+$"));
 assert.ok(!safe("^(?:a|[a-\\d])+$"), "escaped HIGH endpoint");
 assert.ok(!safe("^(?:[+-\\-]|,)+$"));
 
-// An escaped hyphen is a LITERAL, not a range operator, so it stays modellable.
-assert.ok(safe("^([\\-]|a)+$"));
-assert.ok(safe("^([\\.]|a)+$"));
-assert.ok(safe("^([\\]]|a)+$"));
-assert.ok(safe("^([\\w]|-)+$"));
-// Plain ranges with literal endpoints are still modelled exactly.
-assert.ok(safe("^([a-z]|[0-9])+$"));
-assert.ok(safe("^([a-m]|[n-z])+$"));
+// Since the retreat to literal-only first atoms, NO character class and no
+// escape is modelled, so every one of these is refused. That is the safe
+// direction and it costs nothing real — the natural spellings below, which are
+// not alternations at all, are unaffected.
+for (const p of [
+  "^([\\-]|a)+$",
+  "^([\\.]|a)+$",
+  "^([\\]]|a)+$",
+  "^([\\w]|-)+$",
+  "^([a-z]|[0-9])+$",
+  "^([a-m]|[n-z])+$",
+]) {
+  assert.ok(!safe(p), `a class is no longer modelled: ${p}`);
+}
+assert.ok(safe("^[\\w-]+$"), "the natural class spelling is unaffected");
+assert.ok(safe("^[a-z0-9]+$"));
+// Alternation of plain LITERALS is still modelled, which is the case that
+// actually appears in real rules.
+assert.ok(safe("^(img|dsc|pxl)+$"));
+assert.ok(safe("^(a|b)+$"));
+assert.ok(!safe("^(a|aa)+$"), "...and overlapping literals are still caught");
 
 console.log("regexSafety escaped-range tests passed");
