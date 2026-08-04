@@ -1,6 +1,8 @@
 import assert from "node:assert";
 import {
   appendBatch,
+  trimEntries,
+  MAX_JOURNAL_ENTRIES,
   batchBytes,
   describeBatch,
   normalizeJournal,
@@ -164,7 +166,46 @@ assert.deepStrictEqual(
     entries: [{ from: `f${i}.png`, sizeBytes: 1 }],
   }));
   assert.strictEqual(normalizeJournal(many, 5).length, 5);
-  assert.strictEqual(normalizeJournal(many, 0).length, 0);
+  // A limit of 0 means "stop RECORDING", not "purge". Purging would discard
+  // still-restorable history the instant the setting is typed, while the files
+  // sit in `.trash` unreachable from the plugin. Clearing is an explicit action.
+  assert.strictEqual(normalizeJournal(many, 0).length, 20, "0 does not purge on load");
+  assert.strictEqual(appendBatch(many as never, batch({ id: "new" }), 0).length, 0, "...but records nothing new");
+}
+
+// --- Entry cap --------------------------------------------------------------
+// The batch cap bounds nothing that matters: one vault-wide cleanup is thousands
+// of entries, and `saveSettings` re-serializes the whole object on routine clicks.
+{
+  const big = (id: string, n: number): JournalBatch =>
+    batch({ id, entries: Array.from({ length: n }, (_, i) => ({ from: `f${i}.png`, sizeBytes: 1 })) });
+
+  // The newest batch is kept whole even when it alone blows the budget — a
+  // history that truncated the action you just took would be worse than useless.
+  const huge = trimEntries([big("huge", MAX_JOURNAL_ENTRIES + 1)]);
+  assert.strictEqual(huge.length, 1);
+  assert.strictEqual(huge[0].entries.length, MAX_JOURNAL_ENTRIES + 1);
+
+  // ...and it must not evict everything behind it. The newest is exempt from the
+  // budget, so one vault-wide cleanup does not wipe the older restorable history.
+  const mixed = trimEntries([big("huge", MAX_JOURNAL_ENTRIES + 1), big("a", 10), big("b", 10)]);
+  assert.deepStrictEqual(mixed.map((b) => b.id), ["huge", "a", "b"], "older batches survive");
+
+  // An oversized batch in the MIDDLE is stepped over, not stopped at.
+  const middle = trimEntries([big("new", 5), big("huge", MAX_JOURNAL_ENTRIES + 1), big("old", 5)]);
+  assert.deepStrictEqual(middle.map((b) => b.id), ["new", "old"], "smaller older batches still fit");
+
+  // The budget is enforced across batches.
+  const many2 = Array.from({ length: 10 }, (_, i) => big(`b${i}`, 1000));
+  const trimmed = trimEntries(many2);
+  assert.ok(trimmed.length < 10, "trimmed to the entry budget");
+  // The newest is exempt, so the bound is budget + newest.
+  assert.ok(
+    trimmed.slice(1).reduce((n, b) => n + b.entries.length, 0) <= MAX_JOURNAL_ENTRIES,
+    "everything past the newest is within budget"
+  );
+  // Newest first, so the trim drops the oldest.
+  assert.strictEqual(trimmed[0].id, "b0");
 }
 // Nothing hostile throws.
 for (const hostile of [[{ id: "a", at: "2026-08-04T10:00:00Z", op: "trash", entries: "nope" }], [[]], [{ entries: [[]] }]]) {

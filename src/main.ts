@@ -4,6 +4,7 @@ import {
   FuzzySuggestModal,
   Notice,
   Platform,
+  type DataAdapter,
   Plugin,
   type TAbstractFile,
   TFile,
@@ -42,6 +43,7 @@ import {
   appendBatch,
   replaceBatch,
   restorability,
+  HEAD_HASH_BYTES,
   type CleanupOp,
   type JournalBatch,
   type JournalEntry,
@@ -867,9 +869,12 @@ export default class AttachmentManagerPlugin extends Plugin {
         // between the scan and the trash would otherwise be unidentifiable.
         const sizeBytes = file.stat.size;
         const mtime = file.stat.mtime;
+        // Read BEFORE the trash: afterwards the file is somewhere we would have
+        // to guess at, which is the whole problem this hash exists to remove.
+        const headHash = await this.hashFileHead(file);
         await this.app.fileManager.trashFile(file);
         trashed.push(path);
-        journalEntries.push({ from: path, sizeBytes, mtime });
+        journalEntries.push({ from: path, sizeBytes, mtime, headHash });
       } catch (err) {
         console.error(`Attachment Audit: could not trash ${path}`, err);
         failed++;
@@ -932,9 +937,12 @@ export default class AttachmentManagerPlugin extends Plugin {
       try {
         const sizeBytes = file.stat.size;
         const mtime = file.stat.mtime;
+        // Read BEFORE the trash: afterwards the file is somewhere we would have
+        // to guess at, which is the whole problem this hash exists to remove.
+        const headHash = await this.hashFileHead(file);
         await this.app.fileManager.trashFile(file);
         trashed.push(path);
-        journalEntries.push({ from: path, sizeBytes, mtime });
+        journalEntries.push({ from: path, sizeBytes, mtime, headHash });
       } catch (err) {
         console.error(`Attachment Audit: could not trash ${path}`, err);
         failed++;
@@ -1126,9 +1134,17 @@ export default class AttachmentManagerPlugin extends Plugin {
     this.restoringBatches.add(batchId);
     const landedAt: string[] = [];
     const reasons: string[] = [];
+    // Per-entry results, so re-running a partial restore does not search for —
+    // or pull a second file out of the trash for — an entry already put back.
+    const restoredTo = new Map<string, string>();
+    let alreadyDone = 0;
     try {
       // Reverse order, so a batch that moved A onto B's old path undoes B first.
       for (const entry of [...batch.entries].reverse()) {
+        if (entry.restoredTo) {
+          alreadyDone++;
+          continue;
+        }
         try {
           const outcome =
             batch.op === "trash"
@@ -1137,6 +1153,7 @@ export default class AttachmentManagerPlugin extends Plugin {
           if (outcome.path) {
             restored.push(entry.from);
             landedAt.push(outcome.path);
+            restoredTo.set(entry.from, outcome.path);
           } else {
             failed.push(entry.from);
             if (outcome.reason && !reasons.includes(outcome.reason)) reasons.push(outcome.reason);
@@ -1150,13 +1167,19 @@ export default class AttachmentManagerPlugin extends Plugin {
       this.restoringBatches.delete(batchId);
     }
 
-    // Only a COMPLETE restore retires the batch. Marking it reverted after a
-    // partial one would strip the button and strand the remaining files, and the
-    // failures here are often transient (a folder being recreated, a busy adapter).
-    if (failed.length === 0 && restored.length > 0) {
+    // Persist per-entry outcomes, and retire the batch only when every entry has
+    // been put back — across runs, not just this one. Marking it reverted after a
+    // partial restore stripped the button and stranded the rest; NOT recording
+    // the successes meant a re-run reported them as failures and searched the
+    // trash for them again.
+    if (restoredTo.size > 0 || alreadyDone > 0) {
+      const complete = failed.length === 0;
       this.settings.journal = replaceBatch(this.settings.journal, batchId, (b) => ({
         ...b,
-        revertedAt: new Date().toISOString(),
+        entries: b.entries.map((e) =>
+          restoredTo.has(e.from) ? { ...e, restoredTo: restoredTo.get(e.from) } : e
+        ),
+        revertedAt: complete ? new Date().toISOString() : b.revertedAt,
       }));
       await this.saveSettings();
     }
@@ -1166,9 +1189,10 @@ export default class AttachmentManagerPlugin extends Plugin {
     // would send the user to the wrong file.
     const renamed = landedAt.filter((p, i) => p !== restored[i]);
     const parts = [`restored ${restored.length} file${restored.length === 1 ? "" : "s"}`];
+    if (alreadyDone > 0) parts.push(`${alreadyDone} were already back`);
     if (renamed.length > 0) {
       parts.push(
-        `${renamed.length} kept ${renamed.length === 1 ? "its" : "their"} original name was taken, so ` +
+        `${renamed.length} could not keep ${renamed.length === 1 ? "its" : "their"} original name, so ` +
           `${renamed.length === 1 ? "it is" : "they are"} at ${renamed.slice(0, 2).join(", ")}`
       );
     }
@@ -1190,7 +1214,7 @@ export default class AttachmentManagerPlugin extends Plugin {
    * in its place, and relocating that one would be a silent data move.
    */
   private async reverseMove(entry: JournalEntry): Promise<RestoreOutcome> {
-    if (!entry.to) return { path: null };
+    if (!entry.to) return { path: null, reason: "the record is missing where the file went" };
     const file = this.app.vault.getFileByPath(entry.to);
     if (!file) return { path: null, reason: "the file is no longer where it was put" };
     if (file.stat.size !== entry.sizeBytes) {
@@ -1198,7 +1222,9 @@ export default class AttachmentManagerPlugin extends Plugin {
     }
     // Its original home may be occupied now; never overwrite something to undo.
     const target = uniquePath(entry.from, (p) => this.pathExistsCI(p, entry.to));
-    if (this.pathExistsCI(target, entry.to)) return { path: null };
+    if (this.pathExistsCI(target, entry.to)) {
+      return { path: null, reason: "no free name was available at the original location" };
+    }
     await this.ensureParentFolder(target);
     await this.app.fileManager.renameFile(file, target);
     return { path: target };
@@ -1215,32 +1241,36 @@ export default class AttachmentManagerPlugin extends Plugin {
    */
   private async restoreFromLocalTrash(entry: JournalEntry): Promise<RestoreOutcome> {
     const adapter = this.app.vault.adapter;
-    if (!adapter) return { path: null };
+    if (!adapter) return { path: null, reason: "the vault storage is unavailable" };
 
     let listing: string[];
     try {
       if (!(await adapter.exists(TRASH_DIR))) {
         return { path: null, reason: "the vault's trash folder is gone" };
       }
-      // `.files` excludes folders, so a directory sharing the name is never a candidate.
-      listing = (await adapter.list(TRASH_DIR)).files;
+      listing = await this.listTrashRecursive(adapter);
     } catch {
       return { path: null, reason: "the vault's trash could not be read" };
     }
 
-    // Stat every name-plausible candidate, then let the pure selector decide.
-    // It identifies or refuses — it never picks a "best guess", because with
-    // identical names and sizes there is no evidence left to choose on and a
-    // wrong choice writes a stranger's bytes to a path the user trusts.
+    // Stat every name-plausible candidate, then hash the ones whose size matches
+    // and let the pure selector decide. It identifies or refuses — it never picks
+    // a "best guess", because a wrong choice writes a stranger's bytes to a path
+    // the user trusts AND consumes the real file from the trash.
     const wantedName = attachmentBaseName(entry.from);
     const candidates: TrashCandidate[] = [];
     for (const path of listing) {
       if (!couldBeTrashedAs(attachmentBaseName(path), wantedName)) continue;
       try {
         const stat = await adapter.stat(path);
-        if (stat && stat.type === "file") {
-          candidates.push({ path, size: stat.size, mtime: stat.mtime });
-        }
+        if (!stat || stat.type !== "file") continue;
+        // Hash only size-matching candidates: it is the decisive check, but it
+        // reads bytes, so it is not worth paying for a file already excluded.
+        const headHash =
+          stat.size === entry.sizeBytes && entry.headHash !== undefined
+            ? await this.hashHead(adapter, path)
+            : undefined;
+        candidates.push({ path, size: stat.size, mtime: stat.mtime, headHash });
       } catch {
         /* unreadable: cannot be identified, so it cannot be a match */
       }
@@ -1250,14 +1280,70 @@ export default class AttachmentManagerPlugin extends Plugin {
       from: entry.from,
       sizeBytes: entry.sizeBytes,
       mtime: entry.mtime,
+      headHash: entry.headHash,
     });
     if (!outcome.found) return { path: null, reason: explainOutcome(outcome.reason) };
 
     const target = uniquePath(entry.from, (p) => this.pathExistsCI(p));
-    if (this.pathExistsCI(target)) return { path: null };
+    if (this.pathExistsCI(target)) {
+      return { path: null, reason: "no free name was available at the original location" };
+    }
     await this.ensureParentFolder(target);
     await adapter.rename(outcome.found.path, target);
     return { path: target };
+  }
+
+  /**
+   * Every file under `.trash`, at any depth.
+   *
+   * Obsidian's local trash layout is undocumented, and it could not be verified
+   * here whether a trashed `assets/logo.png` lands at `.trash/logo.png` or
+   * `.trash/assets/logo.png`. `adapter.list` is NOT recursive, so a flat listing
+   * would silently find nothing for every attachment in a subfolder — the
+   * feature would appear to work and never restore anything. Walking handles
+   * both layouts without needing to know which one is real.
+   */
+  private async listTrashRecursive(
+    adapter: DataAdapter,
+    dir: string = TRASH_DIR,
+    depth = 0
+  ): Promise<string[]> {
+    if (depth > 8) return []; // pathological nesting guard
+    const out: string[] = [];
+    let listing: { files: string[]; folders: string[] };
+    try {
+      listing = await adapter.list(dir);
+    } catch {
+      return out;
+    }
+    out.push(...listing.files);
+    for (const folder of listing.folders) {
+      out.push(...(await this.listTrashRecursive(adapter, folder, depth + 1)));
+    }
+    return out;
+  }
+
+  /**
+   * SHA-256 of a file's leading bytes — the identity check that does not depend
+   * on anything undocumented. See {@link JournalEntry.headHash}.
+   */
+  private async hashHead(adapter: DataAdapter, path: string): Promise<string | undefined> {
+    try {
+      const buf = await adapter.readBinary(path);
+      const head = buf.byteLength > HEAD_HASH_BYTES ? buf.slice(0, HEAD_HASH_BYTES) : buf;
+      const digest = await crypto.subtle.digest("SHA-256", head);
+      const bytes = new Uint8Array(digest);
+      let hex = "";
+      for (let i = 0; i < bytes.length; i++) hex += bytes[i].toString(16).padStart(2, "0");
+      return hex;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Head hash of a vault file, for recording identity before a mutation. */
+  private async hashFileHead(file: TFile): Promise<string | undefined> {
+    return this.hashHead(this.app.vault.adapter, file.path);
   }
 
   /** Recreate the folder a restored file used to live in, if it has since gone. */

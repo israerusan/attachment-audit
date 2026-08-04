@@ -15,6 +15,8 @@ export interface TrashCandidate {
   path: string;
   size: number;
   mtime: number;
+  /** SHA-256 of the leading bytes, computed lazily only for size-matching files. */
+  headHash?: string;
 }
 
 /** What we are trying to find, from the journal entry that recorded the trash. */
@@ -25,6 +27,8 @@ export interface RestoreTarget {
   sizeBytes: number;
   /** Modification time at the moment it was trashed, when it was recorded. */
   mtime?: number;
+  /** Content hash of the leading bytes at the moment it was trashed. */
+  headHash?: string;
 }
 
 export type CandidateOutcome =
@@ -34,6 +38,20 @@ export type CandidateOutcome =
 /** Basename of a vault path. */
 function baseName(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
+}
+
+/**
+ * Normalize a filename for comparison. macOS filesystems report decomposed
+ * (NFD) names while Obsidian records the composed form, so without this an
+ * accented filename matches nothing and the user is told their file is "no
+ * longer in the trash" while it sits right there.
+ */
+function normalizeName(name: string): string {
+  try {
+    return name.normalize("NFC");
+  } catch {
+    return name;
+  }
 }
 
 function splitName(name: string): { stem: string; ext: string } {
@@ -90,23 +108,50 @@ export function selectTrashCandidate(
   candidates: readonly TrashCandidate[],
   target: RestoreTarget
 ): CandidateOutcome {
-  const wantedName = baseName(target.from);
+  const wantedName = normalizeName(baseName(target.from));
 
-  const byName = candidates.filter((c) => couldBeTrashedAs(baseName(c.path), wantedName));
+  const byName = candidates.filter((c) =>
+    couldBeTrashedAs(normalizeName(baseName(c.path)), wantedName)
+  );
   if (byName.length === 0) return { found: null, reason: "no-match" };
 
-  // Hard gate. A file's size at the moment we trashed it is the strongest cheap
-  // identity signal available, and a mismatch means this is not our file.
+  // Gate 1 — size. Cheap, and a mismatch is decisive: this is not our file.
   const bySize = byName.filter((c) => c.size === target.sizeBytes);
   if (bySize.length === 0) return { found: null, reason: "no-match" };
-  if (bySize.length === 1) return { found: bySize[0] };
 
-  // Several identically-named, identically-sized files. A rename preserves mtime,
-  // so the one we trashed should still carry the timestamp we recorded.
-  if (target.mtime !== undefined) {
-    const exact = bySize.filter((c) => c.mtime === target.mtime);
-    if (exact.length === 1) return { found: exact[0] };
+  // Gate 2 — CONTENT. This is the one that actually establishes identity.
+  // Everything else is circumstantial: `.trash` holds every file the user has
+  // ever deleted, Obsidian's collision naming is undocumented, and whether the
+  // trash preserves mtime could not be verified. Content is not circumstantial.
+  // A recorded hash is therefore allowed to REJECT, not merely to rank.
+  let pool = bySize;
+  if (target.headHash !== undefined) {
+    const hashed = pool.filter((c) => c.headHash !== undefined);
+    // Only apply the gate where it can be evaluated. A candidate we could not
+    // hash (unreadable) is dropped rather than trusted.
+    pool = hashed.filter((c) => c.headHash === target.headHash);
+    if (pool.length === 0) return { found: null, reason: "no-match" };
   }
+  if (pool.length === 1) return { found: pool[0] };
+
+  // Several survivors. Prefer the exact filename over a collision-suffixed one:
+  // it is strictly stronger evidence, and refusing when we have it would be
+  // over-cautious.
+  const exactName = pool.filter((c) => normalizeName(baseName(c.path)) === wantedName);
+  if (exactName.length === 1) return { found: exactName[0] };
+
+  // mtime is only ever a TIEBREAK, never a gate — whether the trash preserves it
+  // is unverified, so a mismatch cannot be treated as evidence of anything.
+  if (target.mtime !== undefined) {
+    const sameTime = pool.filter((c) => c.mtime === target.mtime);
+    if (sameTime.length === 1) return { found: sameTime[0] };
+  }
+
+  // If a content hash was recorded, everything still standing is byte-identical
+  // over its leading bytes AND the same size, so restoring any of them is
+  // equally correct. Without one there is no evidence left, and guessing would
+  // be a silent data swap.
+  if (target.headHash !== undefined) return { found: pool[0] };
   return { found: null, reason: "ambiguous" };
 }
 

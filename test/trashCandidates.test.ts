@@ -38,29 +38,103 @@ const c = (path: string, size: number, mtime = 1000): TrashCandidate => ({ path,
 // --- Ambiguity must REFUSE, not guess ---------------------------------------
 // Same name, same size, no recorded mtime to separate them: there is no evidence
 // left to choose on, and picking the newest would be a silent data swap.
+// Two SUFFIXED candidates: neither name is stronger evidence than the other.
 {
   const out = selectTrashCandidate(
-    [c(".trash/logo.png", 100, 5000), c(".trash/logo 1.png", 100, 9000)],
+    [c(".trash/logo 1.png", 100, 5000), c(".trash/logo 2.png", 100, 9000)],
     { from: "a/logo.png", sizeBytes: 100 }
   );
   assert.strictEqual(out.found, null);
   assert.strictEqual(out.found === null ? out.reason : "", "ambiguous");
 }
-// ...but a recorded mtime that singles one out resolves it.
+// ...but a recorded mtime that singles one out resolves it (tiebreak only).
 {
   const out = selectTrashCandidate(
-    [c(".trash/logo.png", 100, 5000), c(".trash/logo 1.png", 100, 9000)],
+    [c(".trash/logo 1.png", 100, 5000), c(".trash/logo 2.png", 100, 9000)],
     { from: "a/logo.png", sizeBytes: 100, mtime: 9000 }
   );
-  assert.strictEqual(out.found?.path, ".trash/logo 1.png");
+  assert.strictEqual(out.found?.path, ".trash/logo 2.png");
 }
-// An mtime matching BOTH is still ambiguous.
+// An EXACT filename beats a collision-suffixed one — strictly stronger evidence,
+// so refusing when we have it would be over-cautious.
 {
   const out = selectTrashCandidate(
     [c(".trash/logo.png", 100, 5000), c(".trash/logo 1.png", 100, 5000)],
     { from: "a/logo.png", sizeBytes: 100, mtime: 5000 }
   );
+  assert.strictEqual(out.found?.path, ".trash/logo.png", "exact name wins");
+}
+// With NO exact name and no way to separate them, it still refuses.
+{
+  const out = selectTrashCandidate(
+    [c(".trash/logo 1.png", 100, 5000), c(".trash/logo 2.png", 100, 5000)],
+    { from: "a/logo.png", sizeBytes: 100, mtime: 5000 }
+  );
   assert.strictEqual(out.found, null);
+  assert.strictEqual(out.found === null ? out.reason : "", "ambiguous");
+}
+
+// --- Content hash is the decisive gate --------------------------------------
+// Name, size and mtime are all circumstantial. A recorded hash is allowed to
+// REJECT, which is what removes the dependency on Obsidian internals we could
+// not verify (trash layout, collision naming, mtime preservation).
+{
+  const out = selectTrashCandidate(
+    [{ path: ".trash/logo.png", size: 100, mtime: 1, headHash: "aaa" }],
+    { from: "a/logo.png", sizeBytes: 100, headHash: "bbb" }
+  );
+  assert.strictEqual(out.found, null, "same name and size, different content -> refused");
+}
+{
+  const out = selectTrashCandidate(
+    [
+      { path: ".trash/logo.png", size: 100, mtime: 1, headHash: "aaa" },
+      { path: ".trash/logo 1.png", size: 100, mtime: 2, headHash: "bbb" },
+    ],
+    { from: "a/logo.png", sizeBytes: 100, headHash: "bbb" }
+  );
+  assert.strictEqual(out.found?.path, ".trash/logo 1.png", "content picks the right one");
+}
+// A candidate we could not hash is dropped rather than trusted.
+{
+  const out = selectTrashCandidate(
+    [{ path: ".trash/logo.png", size: 100, mtime: 1 }],
+    { from: "a/logo.png", sizeBytes: 100, headHash: "aaa" }
+  );
+  assert.strictEqual(out.found, null, "unhashable candidate is not assumed to match");
+}
+// Two byte-identical candidates: restoring EITHER is correct, so pick one
+// rather than refusing. This is the duplicate-cleanup case by construction.
+{
+  const out = selectTrashCandidate(
+    [
+      { path: ".trash/logo 1.png", size: 100, mtime: 1, headHash: "same" },
+      { path: ".trash/logo 2.png", size: 100, mtime: 2, headHash: "same" },
+    ],
+    { from: "a/logo.png", sizeBytes: 100, headHash: "same" }
+  );
+  assert.ok(out.found, "identical content means either is a correct restore");
+}
+
+// --- Unicode ----------------------------------------------------------------
+// macOS reports decomposed names while Obsidian records the composed form.
+{
+  const nfc = "café.png".normalize("NFC");
+  const nfd = "café.png".normalize("NFD");
+  assert.notStrictEqual(nfc, nfd, "the fixture really is two different strings");
+  const out = selectTrashCandidate([c(`.trash/${nfd}`, 100)], { from: `a/${nfc}`, sizeBytes: 100 });
+  assert.ok(out.found, "NFD candidate matches an NFC record");
+}
+
+// --- mtime never REJECTS ----------------------------------------------------
+// Whether Obsidian's trash preserves mtime is undocumented and unverified, so a
+// mismatch cannot be treated as evidence. A lone content-verified match stands.
+{
+  const out = selectTrashCandidate(
+    [{ path: ".trash/logo.png", size: 100, mtime: 999999, headHash: "aaa" }],
+    { from: "a/logo.png", sizeBytes: 100, mtime: 7, headHash: "aaa" }
+  );
+  assert.ok(out.found, "content match wins over an mtime that disagrees");
 }
 
 // --- The suffix pattern must not swallow ordinary filenames -----------------
@@ -109,10 +183,18 @@ assert.strictEqual(selectTrashCandidate([], { from: "a/logo.png", sizeBytes: 100
   const out = selectTrashCandidate([c(".trash/empty.txt", 0)], { from: "a/empty.txt", sizeBytes: 0 });
   assert.strictEqual(out.found?.path, ".trash/empty.txt");
 }
-// ...but two zero-byte files with the same name are ambiguous, as they should be.
+// An exact name still wins among zero-byte twins.
 {
   const out = selectTrashCandidate(
     [c(".trash/empty.txt", 0, 1), c(".trash/empty 1.txt", 0, 2)],
+    { from: "a/empty.txt", sizeBytes: 0 }
+  );
+  assert.strictEqual(out.found?.path, ".trash/empty.txt");
+}
+// ...but two suffixed zero-byte twins are genuinely indistinguishable.
+{
+  const out = selectTrashCandidate(
+    [c(".trash/empty 1.txt", 0, 1), c(".trash/empty 2.txt", 0, 1)],
     { from: "a/empty.txt", sizeBytes: 0 }
   );
   assert.strictEqual(out.found, null);

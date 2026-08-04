@@ -277,7 +277,8 @@ assert.ok(load({ journalLimit: 99999 }).journalLimit <= 500);
     entries: [{ from: `f${i}.png`, sizeBytes: 1 }],
   }));
   assert.strictEqual(load({ journal: many, journalLimit: 5 }).journal.length, 5);
-  assert.strictEqual(load({ journal: many, journalLimit: 0 }).journal.length, 0);
+  // 0 stops RECORDING; it must not discard history that is still restorable.
+  assert.strictEqual(load({ journal: many, journalLimit: 0 }).journal.length, 20);
 }
 
 // A trash batch with no recorded destination must load as "unknown", which is

@@ -29,12 +29,35 @@ export interface JournalEntry {
    */
   sizeBytes: number;
   /**
-   * Modification time at the moment of the action. A rename preserves mtime, so
-   * this survives the trip into `.trash` and disambiguates same-name, same-size
-   * candidates.
+   * Modification time at the moment of the action. Used only as a weak tiebreak:
+   * whether Obsidian's trash preserves mtime is not documented and could not be
+   * verified, so this is never allowed to REJECT a candidate.
    */
   mtime?: number;
+  /**
+   * SHA-256 of the file's first {@link HEAD_HASH_BYTES} bytes, plus its size, taken
+   * at the moment of the action. This is the real identity check.
+   *
+   * Name, size and mtime are all circumstantial: `.trash` holds everything the
+   * user ever deleted, Obsidian's collision naming is undocumented, and mtime
+   * preservation is unverified. Content is not circumstantial. Hashing only the
+   * head keeps it cheap on a 2 GB video while still being decisive — two files
+   * with the same size and the same first 64 KB are the same file for every
+   * practical purpose, and in the one case they are not (byte-identical
+   * duplicates) restoring either is equally correct.
+   */
+  headHash?: string;
+  /**
+   * Where this entry was actually restored to, once it has been. Per-entry state,
+   * so a partially-restored batch can be re-run to completion without
+   * re-searching — and without pulling a second file out of the trash for an
+   * entry that already came back.
+   */
+  restoredTo?: string;
 }
+
+/** How many leading bytes {@link JournalEntry.headHash} covers. */
+export const HEAD_HASH_BYTES = 64 * 1024;
 
 /** One user-visible action, however many files it touched. */
 export interface JournalBatch {
@@ -91,10 +114,18 @@ export function appendBatch(
  * the action you just took would be worse than useless.
  */
 export function trimEntries(journal: readonly JournalBatch[]): JournalBatch[] {
-  const out: JournalBatch[] = [];
+  if (journal.length === 0) return [];
+  // The newest batch is kept whole and EXEMPT from the budget. A history that
+  // truncated the action you just took would be worse than useless — and
+  // counting it would mean one vault-wide cleanup evicted every older
+  // still-restorable batch behind it, which is the opposite of the point.
+  const out: JournalBatch[] = [journal[0]];
   let total = 0;
-  for (const batch of journal) {
-    if (out.length > 0 && total + batch.entries.length > MAX_JOURNAL_ENTRIES) break;
+  for (let i = 1; i < journal.length; i++) {
+    const batch = journal[i];
+    // Skip, don't STOP: an oversized batch in the middle should not discard the
+    // smaller older ones that still fit behind it.
+    if (total + batch.entries.length > MAX_JOURNAL_ENTRIES) continue;
     out.push(batch);
     total += batch.entries.length;
   }
@@ -186,6 +217,11 @@ export function describeBatch(batch: JournalBatch): string {
  * history would offer a restore that then fails halfway.
  */
 export function normalizeJournal(value: unknown, limit: number): JournalBatch[] {
+  // A limit of 0 means "stop RECORDING", not "purge what is already there".
+  // Purging would silently discard restorable history the moment the setting is
+  // typed, while the files themselves sit in `.trash` and become unreachable from
+  // this plugin. Clearing history is an explicit, confirmed action.
+  const effectiveLimit = limit <= 0 ? MAX_JOURNAL_LIMIT : limit;
   if (!Array.isArray(value)) return [];
   const ops = new Set<CleanupOp>(["trash", "move", "rename"]);
   const destinations = new Set<TrashDestination>(["local", "system", "permanent", "unknown"]);
@@ -216,6 +252,8 @@ export function normalizeJournal(value: unknown, limit: number): JournalBatch[] 
             : 0,
         mtime:
           typeof e.mtime === "number" && Number.isFinite(e.mtime) ? e.mtime : undefined,
+        headHash: typeof e.headHash === "string" && e.headHash ? e.headHash : undefined,
+        restoredTo: typeof e.restoredTo === "string" && e.restoredTo ? e.restoredTo : undefined,
       });
     }
     if (entries.length === 0) continue;
@@ -238,6 +276,6 @@ export function normalizeJournal(value: unknown, limit: number): JournalBatch[] 
     });
   }
 
-  const capped = Math.max(0, Math.min(MAX_JOURNAL_LIMIT, Math.floor(limit)));
+  const capped = Math.max(0, Math.min(MAX_JOURNAL_LIMIT, Math.floor(effectiveLimit)));
   return trimEntries(out.slice(0, capped));
 }

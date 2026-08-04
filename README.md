@@ -65,11 +65,11 @@ It is also honest about what it cannot do. Only files sent to the vault's `.tras
 
 | Your "Deleted files" setting | Can Attachment Audit restore it? |
 | --- | --- |
-| Move to Obsidian trash (`.trash`) | Yes, in one click |
+| Move to Obsidian trash (`.trash`) | Yes, in one click — after verifying the file's content is the one you trashed |
 | Move to system trash | No — it tells you to restore from there |
 | Permanently delete | No, and it says so before you confirm |
 
-Where a trashed file went is recorded at the moment of the action, so changing that setting later can never make the history offer a restore that would not work. Moves and renames are always reversible, and reversing one re-updates every link it changed.
+Where a trashed file went is recorded at the moment of the action, so changing that setting later can never make the history offer a restore that would not work. Before putting a file back, its size and content are checked against what was recorded — if it cannot be identified with certainty, the restore refuses and says why rather than guessing. Moves and renames are always reversible, and reversing one re-updates every link it changed.
 
 ## Free vs Pro
 
