@@ -4,6 +4,8 @@
 
 Attachment Audit scans your vault for truly unused attachments, duplicates, oversized files, junk-named pastes, and misplaced files — then shows exactly what is reclaimable before you touch anything.
 
+**Works offline** · **One-time payment** · **Unlimited future updates** · **No account**
+
 <!-- SCREENSHOT SLOT — drop a real Obsidian capture here to lift conversions.
      ![Attachment Audit dashboard: reclaimable-space total with files grouped by detector](docs/assets/hero.png)
      Suggested shot: the dashboard showing the reclaimable-space total and a few flagged files (unused / duplicate / large). Save as docs/assets/hero.png -->
@@ -12,6 +14,52 @@ Attachment Audit scans your vault for truly unused attachments, duplicates, over
 Free lets you scan and clean one file at a time. Pro unlocks bulk cleanup, saved scan profiles, custom rules, severity tuning, and Markdown reports.
 
 > Built for the moment when "I think these files are junk" is not good enough and you want evidence before you start deleting.
+
+Best fit if you:
+- have a vault full of screenshots, pasted images, PDFs, and mystery files you no longer trust
+- want proof before deleting anything
+- need to reclaim space without breaking notes or babysitting file cleanup one attachment at a time
+
+## Free vs Pro at a glance
+
+Free is a complete audit tool. Pro is for *changing* many files at once.
+
+| Feature | Free | Pro |
+| --- | :---: | :---: |
+| All six detectors | ✓ | ✓ |
+| Dashboard with reclaimable-space total | ✓ | ✓ |
+| Image previews and duplicate grouping | ✓ | ✓ |
+| One-file-at-a-time cleanup | ✓ | ✓ |
+| Open / reveal / rename / ignore / exclude / mark reviewed | ✓ | ✓ |
+| Per-detector thresholds and exclusions | ✓ | ✓ |
+| Multi-select, bulk ignore and bulk mark-reviewed | ✓ | ✓ |
+| Markdown report export | ✓ | ✓ |
+| Cleanup history and restore | ✓ | ✓ |
+| Your first bulk cleanup | ✓ | ✓ |
+| Unlimited bulk trash, dedupe and move |  | ✓ |
+| Saved scan profiles |  | ✓ |
+| Custom rules |  | ✓ |
+| Severity tuning |  | ✓ |
+
+- **Free:** audit the vault properly, inspect evidence, and clean cautiously one file at a time.
+- **Pro:** stop babysitting cleanup and clear whole batches safely — with bulk actions, saved profiles, custom rules, and severity tuning.
+- **Buy once, unlock in seconds:** [Buy Attachment Audit Pro](https://buymeacoffee.com/vaultspotlight/e/560207) — automated key delivery, offline activation, no subscription.
+
+## Why Pro is worth paying for
+
+Free proves the audit is trustworthy. Pro makes cleanup practical at real vault size.
+
+The paid value is not just "more settings." It is the difference between:
+- checking suspicious files one by one
+- actually reclaiming space across a large vault without turning cleanup into a part-time job
+
+If your vault has become a landfill of screenshots, pasted images, duplicate exports, and old PDFs, the practical Pro win is:
+- bulk trash, move, and dedupe instead of one-file babysitting
+- saved scan profiles for recurring cleanup passes
+- custom rules for your vault's own mess patterns
+- severity tuning so the dashboard matches your standards, not a generic default
+
+That is the upgrade story: not "extra knobs," but "I can finally clean this vault like an adult."
 
 ## Why Attachment Audit exists
 
@@ -25,7 +73,7 @@ The scary part is cleanup:
 
 Attachment Audit exists to make that decision with evidence instead of vibes.
 
-## What it finds
+## What it catches before cleanup
 
 - **Unused** — attachments no note truly references
 - **Duplicates** — byte-identical copies grouped with SHA-256, shown as one cluster with the recoverable total
@@ -71,30 +119,7 @@ It is also honest about what it cannot do. Only files sent to the vault's `.tras
 
 Where a trashed file went is recorded at the moment of the action, so changing that setting later can never make the history offer a restore that would not work. Before putting a file back, its size and content are checked against what was recorded — if it cannot be identified with certainty, the restore refuses and says why rather than guessing. Moves and renames are always reversible, and reversing one re-updates every link it changed.
 
-## Free vs Pro
-
-Free is a complete audit tool. Pro is for *changing* many files at once.
-
-| Feature | Free | Pro |
-| --- | :---: | :---: |
-| All six detectors | ✓ | ✓ |
-| Dashboard with reclaimable-space total | ✓ | ✓ |
-| Image previews and duplicate grouping | ✓ | ✓ |
-| One-file-at-a-time cleanup | ✓ | ✓ |
-| Open / reveal / rename / ignore / exclude / mark reviewed | ✓ | ✓ |
-| Per-detector thresholds and exclusions | ✓ | ✓ |
-| Multi-select, bulk ignore and bulk mark-reviewed | ✓ | ✓ |
-| Markdown report export | ✓ | ✓ |
-| Cleanup history and restore | ✓ | ✓ |
-| Your first bulk cleanup | ✓ | ✓ |
-| Unlimited bulk trash, dedupe and move |  | ✓ |
-| Saved scan profiles |  | ✓ |
-| Custom rules |  | ✓ |
-| Severity tuning |  | ✓ |
-
-Purchase: [Buy Me a Coffee — Attachment Audit Pro](https://buymeacoffee.com/vaultspotlight/e/560207). License keys are verified **offline** (Ed25519) — no account, server, or subscription.
-
-**Activate Pro**
+## Activate Pro
 
 1. Purchase via [Buy Me a Coffee — Attachment Audit Pro](https://buymeacoffee.com/vaultspotlight/e/560207).
 2. Your license key is emailed to you **automatically, within seconds** — delivery is fully automated, no waiting.
@@ -116,7 +141,7 @@ Copy `main.js`, `manifest.json`, and `styles.css` into `.obsidian/plugins/attach
 2. Optionally set an attachment folder to enable misplaced-file checks and one-click moves.
 3. Review the reclaimable-space summary and work through the flagged files.
 
-## Safety
+## Practical safety notes
 
 Attachment Audit touches files, so safety is the whole business model:
 
@@ -125,6 +150,13 @@ Attachment Audit touches files, so safety is the whole business model:
 - duplicate cleanup keeps at least one copy and never touches a referenced file — see [How duplicate cleanup decides](#how-duplicate-cleanup-decides)
 - moves and renames use Obsidian's link-updating rename flow
 - every destructive action confirms and re-checks before acting
+
+## What it is good for
+
+- Reclaiming space from truly unused attachments without trusting a flimsy orphan list
+- Finding duplicate waste before it quietly bloats sync time and mobile storage
+- Cleaning junk names and misplaced files once you have evidence, not hunches
+- Reviewing broken links and attachment-folder drift before the vault gets sloppier
 
 ## How duplicate cleanup decides
 
@@ -150,36 +182,6 @@ There is no "smart" choice of which copy is better. Linked copies survive becaus
 
 Related: **Move** and **Rename** *do* update links — Markdown links, wikilinks, and canvas references, via Obsidian's own link-updating rename. They do not rewrite raw HTML `<img src="...">` or path strings stored in frontmatter. Duplicate cleanup needs none of this, since it only ever removes files nothing points at.
 
-## Pro
-
-Attachment Audit Pro uses an offline license key.
-
-- one-time payment
-- no account required
-- no always-online checks
-- validated locally in your vault
-
-Pro is for people who want to reclaim space in batches instead of babysitting one file at a time.
-
-## Buy Pro
-
-Attachment Audit Pro uses an offline license key and a one-time payment.
-
-**Buy Attachment Audit Pro — $9 one-time:** https://buymeacoffee.com/vaultspotlight/e/560207
-
-What you get:
-- bulk cleanup across many files
-- saved scan profiles
-- custom rules
-- severity tuning
-- Markdown report export
-
-Delivery model:
-- one-time purchase
-- no account required
-- offline license verification
-- license key delivered automatically by email, in seconds
-
 ## Privacy
 
 Everything runs locally in your vault.
@@ -188,11 +190,6 @@ Everything runs locally in your vault.
 - no telemetry
 - no account
 - offline license validation
-
-## Pricing
-
-- **Free** — full audit plus one-file-at-a-time cleanup
-- **Pro — $9 one-time** — bulk cleanup, saved profiles, custom rules, severity tuning, and Markdown report export
 
 ## FAQ
 
