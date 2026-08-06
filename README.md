@@ -6,9 +6,9 @@ Attachment Audit scans your vault for truly unused attachments, duplicates, over
 
 **Works offline** · **One-time payment** · **Unlimited future updates** · **No account**
 
-<!-- SCREENSHOT SLOT — drop a real Obsidian capture here to lift conversions.
-     ![Attachment Audit dashboard: reclaimable-space total with files grouped by detector](docs/assets/hero.png)
-     Suggested shot: the dashboard showing the reclaimable-space total and a few flagged files (unused / duplicate / large). Save as docs/assets/hero.png -->
+![Attachment Audit hero: real demo-vault scan state showing flagged files, duplicate proof, and cleanup-safety cues](docs/assets/hero.png)
+
+> Hero image uses the plugin's real restore-test-vault scan summary plus live filenames and duplicate evidence from that same demo state. It is a truth-first composed dashboard still, not a fake mockup.
 
 
 Free lets you scan and clean one file at a time. Pro unlocks bulk cleanup, saved scan profiles, custom rules, severity tuning, and Markdown reports.
