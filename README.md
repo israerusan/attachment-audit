@@ -8,7 +8,7 @@ Attachment Audit scans your vault for truly unused attachments, duplicates, over
 
 ![Attachment Audit hero: real demo-vault scan state showing flagged files, duplicate proof, and cleanup-safety cues](docs/assets/hero.png)
 
-> Hero image is a live Obsidian capture from the restore test vault after a real scan: the flagged-attachment review modal is open in the center, and the right-side dashboard shows the same scan summary and grouped findings.
+> Hero image is a live Obsidian capture from the restore test vault after a real scan: the review modal is open on a 5.2 MB misplaced screenshot, while the dashboard on the right shows 10 flagged attachments, 9.6 MB reclaimable, duplicate review, large-file hits, and junk-name detection from the same scan.
 
 
 Free lets you scan and clean one file at a time. Pro unlocks bulk cleanup, saved scan profiles, custom rules, severity tuning, and Markdown reports.
