@@ -4,18 +4,19 @@
 
 Attachment Audit scans your vault for truly unused attachments, duplicates, oversized files, junk-named pastes, and misplaced files — then shows exactly what is reclaimable before you touch anything.
 
-**Works offline** · **One-time payment** · **Unlimited future updates** · **No account**
-
-![Attachment Audit motion proof: real demo-vault review flow switching between flagged files](docs/assets/attachment-audit-review-flow.gif)
-
-> Motion proof: a live Obsidian capture from the restore test vault cycling through flagged files in the review flow. It moves from a 5.2 MB misplaced screenshot to another junk-named orphan while the same scan summary stays visible on the right.
-
 ![Attachment Audit hero: real demo-vault scan state showing flagged files, duplicate proof, and cleanup-safety cues](docs/assets/hero.png)
 
 > Hero image is a live Obsidian capture from the same scan: the review modal is open on a 5.2 MB misplaced screenshot, while the dashboard on the right shows 10 flagged attachments, 9.6 MB reclaimable, duplicate review, large-file hits, and junk-name detection.
 
+**Works offline** · **One-time payment** · **Unlimited future updates** · **No account**
 
-Free lets you scan and clean one file at a time. Pro unlocks bulk cleanup, saved scan profiles, custom rules, severity tuning, and Markdown reports.
+Attachment Audit gives you the part most vault tools avoid: enough evidence to clean attachments without guessing. Free lets you audit the vault properly and clean one file at a time. Pro unlocks bulk cleanup, saved scan profiles, custom rules, and severity tuning when the vault is too messy for babysitting.
+
+- **Buy once, unlock in seconds:** [Buy Attachment Audit Pro](https://buymeacoffee.com/vaultspotlight/e/560207) — automated key delivery, offline activation, no subscription.
+
+![Attachment Audit motion proof: real demo-vault review flow switching between flagged files](docs/assets/attachment-audit-review-flow.gif)
+
+> Motion proof: a live Obsidian capture from the restore test vault cycling through flagged files in the review flow. It moves from a 5.2 MB misplaced screenshot to another junk-named orphan while the same scan summary stays visible on the right.
 
 > Built for the moment when "I think these files are junk" is not good enough and you want evidence before you start deleting.
 
@@ -46,8 +47,7 @@ Free is a complete audit tool. Pro is for *changing* many files at once.
 | Severity tuning |  | ✓ |
 
 - **Free:** audit the vault properly, inspect evidence, and clean cautiously one file at a time.
-- **Pro:** stop babysitting cleanup and clear whole batches safely — with bulk actions, saved profiles, custom rules, and severity tuning.
-- **Buy once, unlock in seconds:** [Buy Attachment Audit Pro](https://buymeacoffee.com/vaultspotlight/e/560207) — automated key delivery, offline activation, no subscription.
+- **Pro:** stop babysitting cleanup and clear whole batches safely — with bulk actions, saved profiles, custom rules, severity tuning.
 
 ## Why Pro is worth paying for
 
@@ -65,7 +65,7 @@ If your vault has become a landfill of screenshots, pasted images, duplicate exp
 
 That is the upgrade story: not "extra knobs," but "I can finally clean this vault like an adult."
 
-## Why Attachment Audit exists
+## What problem it solves
 
 Most attachment tools optimize for naming or filing. Useful, sure. But that is not the scary part.
 
@@ -107,7 +107,7 @@ It also keeps cleanup sane:
 - if any source file cannot be read, nothing is flagged unused that run
 - **everything it changes is recorded, and you can put it back**
 
-## Cleanup history
+## Restore and rollback
 
 Every trash, move and rename is recorded: which files, from where, to where, and when. Open it from the dashboard, the command palette, or settings — and click once to put a whole action back.
 
@@ -129,7 +129,7 @@ Where a trashed file went is recorded at the moment of the action, so changing t
 2. Your license key is emailed to you **automatically, within seconds** — delivery is fully automated, no waiting.
 3. Paste it into the plugin's settings — Pro unlocks instantly, verified offline.
 
-## Install
+## Install in 30 seconds
 
 **Community plugins**
 
@@ -139,7 +139,7 @@ Open **Settings → Community plugins**, search **Attachment Audit**, and instal
 
 Copy `main.js`, `manifest.json`, and `styles.css` into `.obsidian/plugins/attachment-audit/` in your vault, then enable the plugin.
 
-## Getting started
+## Get to the first safe cleanup
 
 1. Run **Attachment Audit: Run attachment scan** from the command palette.
 2. Optionally set an attachment folder to enable misplaced-file checks and one-click moves.
@@ -186,7 +186,7 @@ There is no "smart" choice of which copy is better. Linked copies survive becaus
 
 Related: **Move** and **Rename** *do* update links — Markdown links, wikilinks, and canvas references, via Obsidian's own link-updating rename. They do not rewrite raw HTML `<img src="...">` or path strings stored in frontmatter. Duplicate cleanup needs none of this, since it only ever removes files nothing points at.
 
-## Privacy
+## Private by default
 
 Everything runs locally in your vault.
 
