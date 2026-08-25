@@ -79,6 +79,7 @@ export class AttachmentManagerSettingTab extends PluginSettingTab {
     this.renderSeveritySection();
     this.renderRulesSection();
     this.renderProfilesSection();
+    this.renderFeedbackSection();
   }
 
   private save(): Promise<void> {
@@ -485,6 +486,27 @@ export class AttachmentManagerSettingTab extends PluginSettingTab {
         }).open();
       })
     );
+  }
+
+  // --- Feedback -------------------------------------------------------------
+
+  private renderFeedbackSection(): void {
+    const { containerEl } = this;
+    new Setting(containerEl).setName("Feedback").setHeading();
+
+    new Setting(containerEl)
+      .setName("Bugs and feature requests")
+      .setDesc("Issues and ideas are tracked on GitHub. Opens in your browser.")
+      .addButton((button) =>
+        button.setButtonText("Report a bug").onClick(() => {
+          window.open("https://github.com/israerusan/attachment-audit/issues/new?labels=bug");
+        })
+      )
+      .addButton((button) =>
+        button.setButtonText("Request a feature").onClick(() => {
+          window.open("https://github.com/israerusan/attachment-audit/issues/new?labels=enhancement");
+        })
+      );
   }
 
   private proHeading(title: string): void {
