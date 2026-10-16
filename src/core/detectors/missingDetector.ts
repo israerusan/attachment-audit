@@ -5,8 +5,7 @@
 // `metadataCache.unresolvedLinks` (source note -> link text -> count), so the
 // work here is filtering that down to links that actually look like attachments.
 
-import { extensionOf } from "../scan/attachmentFilter";
-import { NON_ATTACHMENT_EXTENSIONS } from "../scan/attachmentFilter";
+import { extensionOf, KNOWN_ATTACHMENT_EXTENSIONS } from "../scan/attachmentFilter";
 
 /** One absent attachment, plus the notes still pointing at it. */
 export interface MissingAttachment {
@@ -19,10 +18,19 @@ export interface MissingAttachment {
 }
 
 /**
- * A link is only reported when it carries a non-document file extension. Without
- * that filter every unresolved `[[Some Note]]` — the normal, intentional way
- * people write forward links in Obsidian — would be reported as a broken
- * attachment, which would be noise so loud the detector would be worthless.
+ * A link is only reported when it carries a RECOGNISED attachment extension.
+ *
+ * "Has an extension that is not md/canvas/base" is not good enough, and shipped
+ * as a permanent noise source: `extensionOf` is "everything after the last dot",
+ * so `[[2024.01.15]]` has extension `15` and `[[v1.2 plan]]` has `2 plan`. Both
+ * passed, so a vault using dotted daily notes — or any forward link to an
+ * uncreated note with a dot in its title — collected a severity-3 "broken
+ * attachment" issue per link on every single scan.
+ *
+ * An allowlist is the right trade here because of what this detector can do:
+ * nothing. A missing link is reported, never acted on, so an unrecognised
+ * extension costs one absent line, while a false positive costs the credibility
+ * of the whole report.
  */
 function looksLikeAttachmentLink(link: string): boolean {
   // Strip a heading/block anchor and any display alias before testing.
@@ -32,7 +40,7 @@ function looksLikeAttachmentLink(link: string): boolean {
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(bare) || bare.startsWith("//")) return false;
   const ext = extensionOf(bare);
   if (!ext) return false;
-  return !NON_ATTACHMENT_EXTENSIONS.has(ext);
+  return KNOWN_ATTACHMENT_EXTENSIONS.has(ext);
 }
 
 /**

@@ -35,9 +35,33 @@ for (const path of ["img/photo.png", "docs/report.pdf", "audio/clip.mp3", "video
   assert.ok(!isMentionSourcePath(path), `${path} is not a reference source`);
 }
 
-// Extension-less files and dotfiles are not sources.
-assert.ok(!isMentionSourcePath("LICENSE"));
-assert.ok(!isMentionSourcePath(".gitignore"), "a dotfile with no real extension is not a source");
+// Formats the old allowlist omitted. Each was a file the safety scan would never
+// read while still being willing to trash what it referenced — a `Hero.tsx` with
+// an `<img src="../assets/hero.png" />` made `hero.png` look unused. The rule is
+// now a binary DENYLIST, so a format nobody thought of costs one wasted read
+// rather than a lost file.
+for (const path of [
+  "site/Hero.tsx",
+  "site/Card.jsx",
+  "site/App.vue",
+  "site/App.svelte",
+  "styles/main.scss",
+  "scripts/deploy.ps1",
+  "src/Main.java",
+  "src/main.go",
+  "queries/report.sql",
+  "logs/import.log",
+  "conf/app.conf",
+  "templates/page.njk",
+]) {
+  assert.ok(isMentionSourcePath(path), `${path} must be read as a reference source`);
+}
+
+// Extension-less files and dotfiles ARE sources now, for the same reason: a file
+// with no extension is far more likely to be a config or a text file carrying a
+// path than a binary blob, and guessing wrong in the other direction costs a file.
+assert.ok(isMentionSourcePath("LICENSE"), "an extension-less file is read, not assumed binary");
+assert.ok(isMentionSourcePath(".gitignore"), "a dotfile is read, not assumed binary");
 // ...but a file literally named `.md` IS `md` to Obsidian, and the scan classifies
 // by TFile.extension — the listener must agree or a changed source goes untracked.
 assert.ok(isMentionSourcePath("notes/.md"));

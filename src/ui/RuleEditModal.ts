@@ -1,4 +1,5 @@
 import { App, Modal, Notice, Setting } from "obsidian";
+import { checkRegexSafety } from "../core/rules/regexSafety";
 import type { CustomRule, CustomRuleCondition } from "../types";
 import { newId } from "../core/utils/ids";
 import { parseList } from "../settings";
@@ -149,6 +150,22 @@ export class RuleEditModal extends Modal {
     if (!condition) {
       new Notice("Please fill in the condition field.");
       return;
+    }
+    // Screen the pattern HERE, where the user can still fix it.
+    //
+    // Nothing validated it before. An unsafe or malformed pattern was accepted by
+    // this dialog, saved, and listed in settings as an enabled rule — and then
+    // `customRuleEngine` cached it as `null` and the condition returned false for
+    // every file, forever, with no message anywhere. A rule that matches nothing
+    // and says nothing is worse than a rejected one, and this is a paid feature.
+    // (The junk-name textarea has always reported its own rejections; the rules
+    // UI simply never grew the same check.)
+    if (condition.type === "name-matches") {
+      const verdict = checkRegexSafety(condition.pattern);
+      if (!verdict.safe) {
+        new Notice(`${verdict.reason ?? "That pattern cannot be used."}`, 10000);
+        return;
+      }
     }
     const rule: CustomRule = {
       id: this.existing?.id ?? newId("rule"),

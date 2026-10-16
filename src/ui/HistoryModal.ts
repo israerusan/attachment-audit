@@ -134,6 +134,9 @@ export class HistoryModal extends Modal {
       return;
     }
 
+    if (verdict.caveat) {
+      actions.createSpan({ cls: "attachment-audit-history-note", text: verdict.caveat });
+    }
     if (done > 0) {
       actions.createSpan({
         cls: "attachment-audit-history-note",
@@ -162,12 +165,15 @@ export class HistoryModal extends Modal {
     // `.trash`, or one whose content no longer matches. Without this the card
     // stays live forever and every click re-walks the trash and re-fails, with
     // no way to acknowledge it and move on.
-    if (done > 0) {
-      const dismiss = actions.createEl("button", { text: "Done with this" });
-      dismiss.addEventListener("click", () => {
-        void this.plugin.dismissBatch(batch.id).then(() => this.render());
-      });
-    }
+    //
+    // Offered whenever the batch is restorable at all, NOT only once something
+    // has come back. Gating it on `done > 0` meant the one case it exists for —
+    // emptying the OS trash after a cleanup, so that every single entry fails —
+    // was the exact case where it never appeared.
+    const dismiss = actions.createEl("button", { text: "Done with this" });
+    dismiss.addEventListener("click", () => {
+      void this.plugin.dismissBatch(batch.id).then(() => this.render());
+    });
   }
 }
 

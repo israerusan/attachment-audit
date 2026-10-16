@@ -10,7 +10,7 @@ import type {
   RawAttachmentInput,
 } from "../../types";
 import { buildAttachmentStat } from "./attachmentStats";
-import { isAttachment, extensionOf } from "./attachmentFilter";
+import { isAttachment } from "./attachmentFilter";
 import { isExcluded, includedByFolders } from "./fileFilters";
 import { unusedDetector } from "../detectors/unusedDetector";
 import { duplicateDetector } from "../detectors/duplicateDetector";
@@ -56,6 +56,30 @@ export type ScanProgress = (done: number, total: number, phase: ScanPhase) => vo
 const READ_BATCH = 32;
 
 /**
+ * Ceiling on source BYTES held in flight by one text-reading batch.
+ *
+ * The same reasoning as {@link HASH_BYTE_BUDGET}, which this pass was missing: a
+ * fixed count of 32 bounds nothing, because `Promise.all` keeps every string
+ * alive until the batch resolves. And the cost per byte is worse here than for
+ * hashing — a source is held as a UTF-16 JS string (2 bytes per ASCII character)
+ * and `searchable()` then allocates a second full copy to case-fold it, so one
+ * 50 MB CSV is ~200 MB resident. Thirty-two of them is a dead renderer, and this
+ * plugin also runs on mobile.
+ */
+const SOURCE_BYTE_BUDGET = 16 * 1024 * 1024;
+
+/**
+ * Hard per-file ceiling on a reference source.
+ *
+ * A single file above this cannot be made safe by batching, and reading it would
+ * cost several times its size in live strings. Skipping one is NOT treated as
+ * "contains no references" — that would be the silent false-unused this whole
+ * pass exists to prevent — it sets the read-failure flag instead, so every
+ * candidate is reported as mentioned and nothing gets trashed on a guess.
+ */
+const MAX_SOURCE_BYTES = 48 * 1024 * 1024;
+
+/**
  * Ceiling on bytes held in flight by one hashing batch. `Promise.all` keeps every
  * buffer alive until the batch resolves, so this — not the file count — is what
  * actually bounds peak memory during duplicate detection.
@@ -63,57 +87,56 @@ const READ_BATCH = 32;
 const HASH_BYTE_BUDGET = 64 * 1024 * 1024;
 
 /**
- * Text-like attachment extensions whose CONTENT can reference another attachment.
- * Every extension missing from this list is a file we will happily trash things
- * on behalf of but never read — so a reference living in it is invisible to the
- * second safety signal and the file it points at looks unused. That is a
- * data-loss hole, so this list errs wide: reading a file that turns out to
- * mention nothing costs a `cachedRead`, while omitting one costs the user a file.
+ * Attachment extensions whose bytes CANNOT reference another attachment.
+ *
+ * This list is a DENYLIST, and that direction is the whole point. It used to be
+ * an allowlist of text-like extensions, whose own comment stated the right policy
+ * — "omitting one costs the user a file" — and then failed to implement it: it
+ * carried `js`/`ts`/`py` but not `jsx`/`tsx`/`vue`/`svelte`/`scss`/`php`/`lua`/
+ * `sql`/`log`/`conf`/`plist`/`hbs`/`njk`, so a `Hero.tsx` containing
+ * `<img src="../assets/hero.png" />` was never read, and `hero.png` was reported
+ * unused and offered for trash.
+ *
+ * Every extension absent from an allowlist is a file we will happily trash things
+ * on behalf of but never read, which is a data-loss hole that grows with every
+ * format the world invents. A denylist inverts the failure: an unknown extension
+ * now costs one `cachedRead` of something that turns out to mention nothing,
+ * instead of costing the user a file.
+ *
+ * Entries are formats whose content is binary or compressed, where a filename
+ * would not appear as readable text anyway.
  */
-const TEXT_ATTACHMENT_EXTS = new Set([
-  "svg",
-  "html",
-  "htm",
-  "css",
-  "xml",
-  "txt",
-  "text",
-  "markdown",
-  "mdx",
-  "org",
-  "rst",
-  "adoc",
-  "asciidoc",
-  "tex",
-  "latex",
-  "bib",
-  "opml",
-  "json",
-  "jsonc",
-  "json5",
-  "yaml",
-  "yml",
-  "toml",
-  "ini",
-  "csv",
-  "tsv",
-  "js",
-  "mjs",
-  "cjs",
-  "ts",
-  "py",
-  "rb",
-  "sh",
-  "excalidraw",
-  "drawio",
-  "puml",
-  "mermaid",
-  "mmd",
-  "srt",
-  "vtt",
-  "url",
-  "webloc",
-  "desktop",
+const BINARY_ATTACHMENT_EXTS = new Set([
+  // images
+  "png", "jpg", "jpeg", "jfif", "gif", "bmp", "webp", "avif", "heic", "heif",
+  "tiff", "tif", "ico", "icns", "psd", "psb", "xcf", "raw", "cr2", "nef", "arw",
+  "dng", "orf", "raf", "sr2",
+  // audio
+  "mp3", "wav", "wave", "m4a", "ogg", "oga", "opus", "flac", "aac", "aiff", "aif",
+  "wma", "mid", "midi", "amr", "ape",
+  // video
+  "mp4", "m4v", "webm", "mov", "mkv", "avi", "ogv", "wmv", "flv", "mpg", "mpeg",
+  "3gp", "3g2", "m2ts", "mts", "vob",
+  // documents and ebooks (binary containers)
+  "pdf", "epub", "mobi", "azw", "azw3", "djvu", "xps", "oxps",
+  // office binaries and zip-container formats
+  "doc", "dot", "xls", "xlt", "ppt", "pot", "docx", "dotx", "xlsx", "xltx",
+  "xlsm", "pptx", "potx", "ppsx", "odt", "ods", "odp", "odg", "pages", "numbers",
+  "key", "vsd", "vsdx", "mpp", "one", "onepkg",
+  // archives and disk images
+  "zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "zst", "lz4", "cab", "iso",
+  "dmg", "pkg", "deb", "rpm", "jar", "war", "apk", "aab", "appimage",
+  // executables, libraries and object code
+  "exe", "dll", "so", "dylib", "bin", "o", "a", "lib", "obj", "msi", "class",
+  "pyc", "pyo", "wasm", "node",
+  // fonts
+  "ttf", "otf", "ttc", "woff", "woff2", "eot",
+  // databases and binary data
+  "db", "sqlite", "sqlite3", "mdb", "accdb", "realm", "parquet", "avro", "orc",
+  "pack", "idx", "npy", "npz", "pt", "pth", "onnx", "safetensors", "gguf", "bin",
+  // design and 3D binaries
+  "sketch", "fig", "xd", "afdesign", "afphoto", "blend", "fbx", "glb", "stl",
+  "3ds", "max", "c4d", "ai", "indd", "swf",
 ]);
 
 /**
@@ -153,9 +176,17 @@ function searchable(text: string): string {
   return (needsNormalization(text) ? text.normalize("NFC") : text).toLowerCase();
 }
 
-/** Extensions whose content is scanned as a reference SOURCE (never trashed). */
+/**
+ * Extensions whose content is scanned as a reference SOURCE.
+ *
+ * Documents always are. Everything else is, UNLESS its bytes are binary — see
+ * {@link BINARY_ATTACHMENT_EXTS} for why the rule is a denylist. An
+ * extension-less file is read too: it is far more likely to be a dotfile or a
+ * config than a binary blob.
+ */
 function isMentionSource(ext: string): boolean {
-  return ext === "md" || ext === "canvas" || ext === "base" || TEXT_ATTACHMENT_EXTS.has(ext);
+  if (ext === "md" || ext === "canvas" || ext === "base") return true;
+  return !BINARY_ATTACHMENT_EXTS.has(ext);
 }
 
 /**
@@ -341,32 +372,31 @@ async function runScanPasses(
     }
     if (pending.length > 0) {
       const matcher = new MentionMatcher();
-      pending.forEach((inp, idx) => {
-        for (const variant of fileNameVariants(inp.name)) matcher.addPattern(variant, idx);
-      });
+      // Yields DURING construction. Building the automaton for 20,000 candidates
+      // measured ~230 ms of unbroken synchronous work wedged between two yield
+      // points — and up to 1-3 s on mobile — with the progress bar frozen at
+      // "Checking references 0 / N" and no abort point, so an unloading plugin
+      // could not stop it either.
+      for (let idx = 0; idx < pending.length; idx++) {
+        for (const variant of fileNameVariants(pending[idx].name)) matcher.addPattern(variant, idx);
+        if ((idx & 511) === 0) await maybeYield();
+      }
       matcher.build();
+      await maybeYield();
 
       let readFailed = false;
       const hits = new Set<number>();
-      let scanned = 0;
       onProgress?.(0, sources.length, "references");
-      for (let i = 0; i < sources.length; i += READ_BATCH) {
-        const batch = sources.slice(i, i + READ_BATCH);
-        const texts = await Promise.all(
-          batch.map((s) =>
-            readSourceText(app, s).catch(() => {
-              readFailed = true;
-              return "";
-            })
-          )
-        );
-        for (const text of texts) {
-          if (text) matcher.scanInto(searchable(text), hits);
-          await maybeYield();
-        }
-        scanned += batch.length;
-        onProgress?.(scanned, sources.length, "references");
-      }
+      await forEachSourceText(
+        app,
+        sources,
+        (text) => matcher.scanInto(searchable(text), hits),
+        () => {
+          readFailed = true;
+        },
+        maybeYield,
+        (scanned) => onProgress?.(scanned, sources.length, "references")
+      );
       for (const text of await collectConfigSourceTexts(app, () => {
         readFailed = true;
       })) {
@@ -493,9 +523,9 @@ export async function findMentionedAttachments(
   if (candidates.length === 0) return mentioned;
 
   const matcher = new MentionMatcher();
-  candidates.forEach((c, idx) => {
-    for (const variant of fileNameVariants(c.name)) matcher.addPattern(variant, idx);
-  });
+  for (let idx = 0; idx < candidates.length; idx++) {
+    for (const variant of fileNameVariants(candidates[idx].name)) matcher.addPattern(variant, idx);
+  }
   matcher.build();
 
   // Two independent "this file changed" signals, UNIONED. Neither alone is
@@ -531,21 +561,15 @@ export async function findMentionedAttachments(
   try {
     const hits = new Set<number>();
     let readFailed = false;
-    for (let i = 0; i < sources.length; i += READ_BATCH) {
-      const batch = sources.slice(i, i + READ_BATCH);
-      const texts = await Promise.all(
-        batch.map((s) =>
-          readSourceText(app, s).catch(() => {
-            readFailed = true;
-            return "";
-          })
-        )
-      );
-      for (const text of texts) {
-        if (text) matcher.scanInto(searchable(text), hits);
-        await maybeYield();
-      }
-    }
+    await forEachSourceText(
+      app,
+      sources,
+      (text) => matcher.scanInto(searchable(text), hits),
+      () => {
+        readFailed = true;
+      },
+      maybeYield
+    );
     // Config-dir sources (CSS snippets, plugin data) carry no mtime we can compare
     // against, so they are always re-read — there are only a handful of them.
     for (const text of await collectConfigSourceTexts(app, () => {
@@ -595,7 +619,15 @@ async function collectConfigSourceTexts(
       if (!(await adapter.exists(dir))) return [];
       return (await adapter.list(dir)).files;
     } catch {
-      return []; // an unreadable directory is not evidence about any attachment
+      // A directory we cannot LIST is not "a directory with nothing in it". It is
+      // evidence that we are blind, which is the only thing `onReadFailure`
+      // exists to encode — and a vault under OneDrive/Dropbox on Windows, or a
+      // sandboxed iCloud path, throws EPERM/EBUSY here routinely. Swallowing it
+      // made every CSS snippet invisible, so an image referenced only by
+      // `background-image: url(assets/bg.png)` read as unused and was offered for
+      // trash.
+      onReadFailure();
+      return [];
     }
   };
 
@@ -614,7 +646,7 @@ async function collectConfigSourceTexts(
       }
     }
   } catch {
-    /* no themes readable — fall through */
+    onReadFailure(); // see `listFiles`: unreadable is not empty
   }
   try {
     if (await adapter.exists(`${configDir}/plugins`)) {
@@ -632,7 +664,7 @@ async function collectConfigSourceTexts(
       }
     }
   } catch {
-    /* no plugin data readable — fall through with whatever we have */
+    onReadFailure(); // see `listFiles`: unreadable is not empty
   }
   for (const name of ["appearance.json", "app.json"]) targets.push(`${configDir}/${name}`);
 
@@ -645,6 +677,62 @@ async function collectConfigSourceTexts(
     }
   }
   return texts;
+}
+
+/**
+ * Read source texts in batches bounded by BYTES, not by file count, invoking
+ * `onText` for each. Mirrors the hashing pass's budget; see
+ * {@link SOURCE_BYTE_BUDGET} for why a count was not enough.
+ *
+ * A file above {@link MAX_SOURCE_BYTES}, or one that fails to read, calls
+ * `onReadFailure` and is skipped. Both are "we are blind here", never "this file
+ * mentions nothing" — the caller turns that into "report everything as
+ * mentioned", which is the only safe reading.
+ */
+async function forEachSourceText(
+  app: App,
+  sources: readonly TFile[],
+  onText: (text: string) => void,
+  onReadFailure: () => void,
+  afterEach: () => Promise<void>,
+  onBatchDone?: (scanned: number) => void
+): Promise<void> {
+  let cursor = 0;
+  let scanned = 0;
+  while (cursor < sources.length) {
+    const batch: TFile[] = [];
+    let budget = 0;
+    while (cursor < sources.length && batch.length < READ_BATCH) {
+      const file = sources[cursor];
+      if (file.stat.size > MAX_SOURCE_BYTES) {
+        onReadFailure();
+        cursor++;
+        scanned++;
+        continue;
+      }
+      // Always take at least one file, even if it alone exceeds the budget.
+      if (batch.length > 0 && budget + file.stat.size > SOURCE_BYTE_BUDGET) break;
+      batch.push(file);
+      budget += file.stat.size;
+      cursor++;
+    }
+    if (batch.length > 0) {
+      const texts = await Promise.all(
+        batch.map((f) =>
+          readSourceText(app, f).catch(() => {
+            onReadFailure();
+            return "";
+          })
+        )
+      );
+      for (const text of texts) {
+        if (text) onText(text);
+        await afterEach();
+      }
+      scanned += batch.length;
+    }
+    onBatchDone?.(scanned);
+  }
 }
 
 /** SHA-256 hex of a file's bytes, via the Web Crypto API (available at runtime). */
@@ -810,5 +898,3 @@ export function buildInboundCounts(app: App): Map<string, number> {
   return inbound;
 }
 
-// Re-exported for callers that only need the attachment predicate.
-export { extensionOf };

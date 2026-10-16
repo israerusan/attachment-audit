@@ -8,8 +8,13 @@ import path from "path";
 import nacl from "tweetnacl";
 import { fileURLToPath } from "url";
 
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const privateKeyPath = path.join(__dirname, ".license-private.key");
+// The plugin id, read from the one place that defines it rather than restated.
+const manifest = JSON.parse(
+  fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8")
+);
 
 function toBase64(bytes) {
   return Buffer.from(bytes)
@@ -37,8 +42,14 @@ if (!fs.existsSync(privateKeyPath)) {
 }
 
 const secretKey = fromBase64(fs.readFileSync(privateKeyPath, "utf8").trim());
+// Read from manifest.json, never restated. The signed `product` must equal the
+// plugin id that `verifyLicense` checks, and this repo has already been renamed
+// once (attachment-manager -> attachment-audit). A hardcoded copy here would keep
+// minting keys for the old product after the next rename: every paid key would
+// fail with "This key is not for Attachment Audit Pro" — indistinguishable from a
+// forgery — and the whole test suite would still pass.
 const payload = {
-  product: "attachment-audit",
+  product: manifest.id,
   email,
   issued: new Date().toISOString(),
 };

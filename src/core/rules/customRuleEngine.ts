@@ -62,7 +62,10 @@ function conditionTrue(stat: AttachmentStat, condition: CustomRuleCondition, now
       const re = compilePattern(condition.pattern);
       // Test the basename (extension stripped), matching the junk-name detector's
       // convention; cap length so a catastrophic-backtracking pattern can't hang.
-      return re ? re.test(stat.basename.slice(0, 256)) : false;
+      // Trimmed as well as capped, matching `matchesJunkName` exactly. Without
+      // the trim a basename with a leading space matched `^IMG` through the
+      // junk-name detector but not through an identical custom rule.
+      return re ? re.test(stat.basename.trim().slice(0, 256)) : false;
     }
     case "older-than-days":
       return isOlderThanDays(stat.mtime, condition.days, now);

@@ -2,6 +2,153 @@
 
 All notable changes to Attachment Audit are documented here. This project adheres to [Keep a Changelog](https://keepachangelog.com/) and [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-10-15
+
+A hardening release. Five independent adversarial reviews plus two outside models
+went at this plugin looking for ways to lose a file, mis-report one, or freeze
+Obsidian. This is what they found, and the numbers below are measured, not
+estimated.
+
+Nothing here changes how you use Attachment Audit. Several things change what it
+refuses to do.
+
+### Fixed — data loss
+
+- **An interrupted bulk cleanup no longer loses its undo.** The cleanup history
+  was written once, after the whole batch finished. Force-quit Obsidian (or let
+  mobile kill it in the background) partway through trashing 2,000 attachments and
+  900 files were in the trash with *no record of where any of them came from* —
+  and because Obsidian's `.trash` is flat, their original folders were
+  unrecoverable by any means. History is now written as the cleanup proceeds.
+- **A file that becomes referenced *during* a cleanup is no longer trashed.** The
+  two-signal safety verdict was established once per batch, then used for a loop
+  that can run for minutes. A note arriving from Obsidian Sync, or an embed you
+  typed, was invisible to the rest of that batch. The verdict is now
+  re-established whenever anything in the vault changes mid-cleanup.
+- **A cleanup stops when the plugin unloads.** Disabling or uninstalling
+  Attachment Audit mid-batch kept deleting files on its behalf.
+- **Undo can no longer hand two files each other's contents.** When one batch
+  trashed two files sharing a name (`a/logo.png` and `b/logo.png`), restoring
+  gave one entry the unsuffixed trash file and the other whatever was left — both
+  paths restored with the wrong content, reported as success. Without a content
+  hash to tell them apart, Attachment Audit now refuses rather than guesses.
+- **Undoing a move verifies content, not just size.** If you deleted a moved file
+  and left a different file of the same size at that path, the undo relocated the
+  stranger and rewrote every link in your vault to point at it.
+- **A failed write no longer hides a completed cleanup.** If recording the
+  history failed (full disk, read-only vault), the error travelled out past the
+  completion notice *and* the dashboard refresh: the dialog closed, nothing
+  happened, and the attachments were gone. Likewise a rename that succeeded but
+  failed to record reported "rename failed" about a file that had been renamed.
+
+### Fixed — files wrongly reported as unused
+
+Each of these was a path to trashing something you were still using.
+
+- **Code and config files are now read.** The list of formats scanned for
+  references was an allowlist that carried `js` and `py` but not `tsx`, `jsx`,
+  `vue`, `svelte`, `scss`, `php`, `lua`, `sql`, `log`, `conf` or `plist` — so a
+  component containing `<img src="../assets/hero.png" />` was never read and
+  `hero.png` looked like an orphan. The rule is now a binary *denylist*: an
+  unknown format costs one wasted read instead of one lost file.
+- **An unreadable folder is treated as "we are blind", not "it is empty".** A
+  directory listing that failed — routine for a vault under OneDrive or Dropbox
+  on Windows, or a sandboxed iCloud path — silently hid every CSS snippet, so an
+  image used only by `background-image: url(...)` was offered for trash.
+- **A case-mismatched excluded folder now excludes.** Typing `templates` for a
+  folder named `Templates` excluded nothing while the settings UI showed the
+  exclusion as configured.
+
+### Fixed — wrong results
+
+- **Dotted note links are no longer reported as broken attachments.** `[[2024.01.15]]`,
+  `[[v1.2 plan]]` and `[[Dr. Smith notes]]` all count as having a "file extension"
+  if the rule is just "has a dot", so every vault using dotted daily notes
+  collected a broken-attachment issue per link, on every scan.
+- **`Screenshot workflow diagram.png` is not junk, and neither is `Untitled Symphony No. 5`.**
+  Two default junk-name patterns had no right-hand anchor, so deliberately named
+  files were flagged on a free-tier default nobody had edited.
+- **A case-mismatched attachment folder no longer flags your whole vault.** With
+  `assets` configured against a folder named `Assets`, every attachment in the
+  vault was reported as misplaced.
+- **Custom rules that cannot work are now refused when you write them.** An
+  unsafe or malformed regex was accepted by the rule editor, saved, and listed as
+  enabled — then matched nothing, forever, with no message anywhere.
+- **Realistic naming rules are no longer rejected.** `^IMG_\d+_\d+_\d+_\d+$`,
+  `^Screenshot \d+-\d+-\d+ at \d+$` and `^[a-z]+-[0-9]+-[a-z]+-[0-9]+$` were all
+  refused as "too many repeats". They are strictly linear — the repeats are
+  separated by characters they cannot match — and the screen now proves that
+  instead of counting.
+- **Report links survive awkward filenames.** A path containing `|`, `#`, `[` or
+  `]` produced a broken or silently aliased wikilink in the exported report.
+- **A size threshold typed into settings now survives a restart.** The settings
+  box accepted a value 1024x above what the loader would keep, which left a
+  threshold no file could exceed — so large-file detection quietly reported
+  nothing for the rest of the session.
+- **Hand-edited or sync-conflicted settings are handled.** A negative "older
+  than N days" in a custom rule made it match every attachment in the vault; a
+  `..` in the attachment folder was passed through to the filesystem; and the
+  schema version could be silently downgraded by opening an older build once.
+
+### Fixed — freezes and memory
+
+Measured on a 50,000-note vault with 20,000 attachments.
+
+- **One large text file no longer takes down the window.** Reference sources were
+  read 32 at a time by *count*, with no byte budget — so a single 50 MB CSV became
+  ~200 MB of live strings, and 32 of them was unbounded. Reads are now budgeted by
+  bytes, and a file too large to read safely is treated as unread (fail-safe)
+  rather than as empty.
+- **Undo is no longer quadratic.** Restoring re-scanned the entire `.trash` for
+  every entry in the batch: 5,000 entries against a 50,000-file trash measured
+  **145 seconds** of frozen UI. The trash is now indexed once per batch.
+- **The reference scan no longer freezes mid-pass.** Building the search automaton
+  for 20,000 candidates was ~230 ms of unbroken work on desktop and 1–3 s on
+  mobile, with the progress bar stuck at 0 and no way to cancel.
+- **A huge duplicate cluster no longer stalls the dashboard.** Page limits applied
+  to the list but not inside a cluster, so one folder copied twice could put
+  thousands of rows on screen at once.
+- **Restoring a very large file no longer risks the window.** It was read entirely
+  into memory and then written out again; above 64 MB the bytes are now moved.
+- **Cleanup history can no longer grow without bound.** The newest batch was
+  exempt from the entry cap, and settings are re-serialized on routine clicks, so
+  one vault-wide cleanup made every later click a multi-megabyte write.
+- **A crash in cleanup history no longer breaks the feature permanently.** Listing
+  a very large `.trash` could throw, which degraded history to a permanent "the
+  vault's trash is empty or unreadable".
+- **The plugin is 44% smaller: 283 KB to 157 KB.** The release build was not being
+  minified. This is startup cost every user pays, and it matters most on mobile.
+
+### Changed
+
+- **A cleanup whose destination was not recorded can now be undone.** Obsidian's
+  "Deleted files" setting is not a public API, so any failure to read it marked a
+  batch permanently unrestorable — while the files sat in the vault's trash, with
+  the "Done with this" button hidden too. Attachment Audit now looks, says that it
+  is looking, and tells you if they are not there.
+- **"Done with this" is always available** on a batch that can be searched. It was
+  hidden unless something had already come back, which is the opposite of when you
+  need it.
+- **The move confirmation is honest about everything it can break.** It warned
+  about raw HTML and frontmatter paths but not CSS snippets, themes, other
+  plugins' settings, or paths inside SVG, HTML and drawing files — all of which
+  the safety scan treats as real references and Obsidian does not rewrite.
+
+### Added
+
+- `ARCHITECTURE.md`, stating the three invariants that hold this plugin together.
+  Two of the three had already been broken once while living only as a comment.
+- Continuous integration. The test suite, the Obsidian review ruleset, and the
+  `src/core` purity boundary now run on every push instead of when someone
+  remembers.
+- A property test asserting that every pattern the regex screen accepts actually
+  runs fast on adversarial input. It immediately found a pattern costing 51 ms
+  *per attachment* — about 17 minutes across a 20,000-attachment vault — and the
+  budget was recalibrated against that measurement.
+- A contract test pinning the product id across `manifest.json`, the source, and
+  the license signer. A drift between any two silently invalidates every license
+  key ever issued, with a message indistinguishable from a forgery.
+
 ## [1.2.1] - 2026-08-04
 
 Two fixes found by testing against a real vault rather than by review.

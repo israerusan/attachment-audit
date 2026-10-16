@@ -814,10 +814,17 @@ button.attachment-audit-tile:hover {
   gap: var(--size-4-2);
 }
 
-.attachment-audit-legend {
-  color: var(--text-faint);
+/* "Show N more copies" inside a duplicate cluster. Cluster members are paged
+   like the top-level list; see CLUSTER_ROWS in ResultsList.ts. */
+.attachment-audit-cluster-more {
+  display: flex;
+  justify-content: center;
+  padding: 2px 0 6px;
+}
+
+.attachment-audit-cluster-more button {
   font-size: var(--font-ui-smaller);
-  margin-top: var(--size-2-2);
+  padding: 2px 10px;
 }
 
 .attachment-audit-cta-dismiss {

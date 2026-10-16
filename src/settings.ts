@@ -4,6 +4,7 @@ import type { IssueType, CustomRule, ScanProfile } from "./types";
 import { ISSUE_TYPES, ISSUE_TYPE_LABELS } from "./types";
 import { DEFAULT_JUNK_NAME_PATTERNS } from "./core/naming/namePatterns";
 import { checkRegexSafety } from "./core/rules/regexSafety";
+import { MAX_THRESHOLD_MB } from "./core/settings/limits";
 import { DEFAULT_JOURNAL_LIMIT, MAX_JOURNAL_LIMIT } from "./core/journal/actionJournal";
 import { openHistory } from "./ui/HistoryModal";
 import { LicenseManager } from "./core/license/LicenseManager";
@@ -526,10 +527,11 @@ export class AttachmentManagerSettingTab extends PluginSettingTab {
 }
 
 /**
- * Largest size threshold accepted, in MB (64 TB). Matches the clamp
- * `normalizeSettings` applies on load.
+ * Largest size threshold accepted, in MB. DERIVED from the single KB ceiling in
+ * `core/settings/limits.ts`, so the UI box and the load-time clamp cannot drift:
+ * this constant used to be the same literal as the KB clamp, which made the UI
+ * accept a value 1024x higher than `normalizeSettings` would keep.
  */
-const MAX_THRESHOLD_MB = 1024 * 1024 * 64;
 
 function clampFloat(value: string, min: number, fallback: number): number {
   const n = Number.parseFloat(value);

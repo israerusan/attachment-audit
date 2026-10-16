@@ -8,6 +8,7 @@
 // "the plugin is broken".
 
 import { ISSUE_TYPES } from "../../types";
+import { MAX_THRESHOLD_KB } from "./limits";
 import {
   DEFAULT_JOURNAL_LIMIT,
   MAX_JOURNAL_LIMIT,
@@ -120,7 +121,7 @@ function normalizeProfile(raw: RawSettings, defaults: AttachmentManagerSettings)
     // Same upper clamp as the top-level field. Without it `1e300` survived into
     // ScanConfig and the `large` detector silently never fired for that profile —
     // the quiet failure mode this module exists to prevent.
-    profile.largeSizeThresholdKb = clampNumber(raw.largeSizeThresholdKb, 0, 0, 1024 * 1024 * 64);
+    profile.largeSizeThresholdKb = clampNumber(raw.largeSizeThresholdKb, 0, 0, MAX_THRESHOLD_KB);
   }
   if (typeof raw.attachmentFolder === "string") profile.attachmentFolder = raw.attachmentFolder;
   if (Array.isArray(raw.junkNamePatterns)) {
@@ -162,10 +163,12 @@ function normalizeRule(raw: RawSettings, defaults: AttachmentManagerSettings): C
     case "older-than-days":
       condition = {
         type: "older-than-days",
-        days:
-          typeof rawCondition.days === "number" && Number.isFinite(rawCondition.days)
-            ? rawCondition.days
-            : 0,
+        // Clamped, not merely checked for finiteness. `isOlderThanDays` tests
+        // `now - mtime > days * MS_PER_DAY`, so a NEGATIVE value makes the rule
+        // fire on every attachment in the vault — one issue per file. `kb` was
+        // already defended downstream; `days` was not, and this module's whole
+        // premise is that data.json is untrusted input. 100 years is the ceiling.
+        days: clampNumber(rawCondition.days, 0, 0, 36500),
       };
       break;
   }
@@ -208,6 +211,13 @@ function normalizeSummary(value: unknown): AttachmentManagerSettings["lastScanSu
     reclaimableBytes: num(raw.reclaimableBytes),
     profileId: typeof raw.profileId === "string" ? raw.profileId : undefined,
   };
+}
+
+/** Either path separator, so a Windows-style entry is split too. */
+const SEPARATORS = /[\\/]+/;
+/** True when a user-typed folder path contains a `..` segment. */
+function hasTraversalSegment(folder: string): boolean {
+  return folder.split(SEPARATORS).some((segment) => segment.trim() === "..");
 }
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
@@ -281,12 +291,20 @@ export function normalizeSettings(
     s.sortMode = defaults.sortMode;
   }
 
-  s.largeSizeThresholdKb = clampNumber(s.largeSizeThresholdKb, defaults.largeSizeThresholdKb, 0, 1024 * 1024 * 64);
-  s.duplicateMaxScanKb = clampNumber(s.duplicateMaxScanKb, defaults.duplicateMaxScanKb, 0, 1024 * 1024 * 64);
+  s.largeSizeThresholdKb = clampNumber(s.largeSizeThresholdKb, defaults.largeSizeThresholdKb, 0, MAX_THRESHOLD_KB);
+  s.duplicateMaxScanKb = clampNumber(s.duplicateMaxScanKb, defaults.duplicateMaxScanKb, 0, MAX_THRESHOLD_KB);
   s.singleTrashCount = clampNumber(s.singleTrashCount, 0, 0, Number.MAX_SAFE_INTEGER);
   s.reclaimedTotalBytes = clampNumber(s.reclaimedTotalBytes, 0, 0, Number.MAX_SAFE_INTEGER);
 
   if (typeof s.attachmentFolder !== "string") s.attachmentFolder = defaults.attachmentFolder;
+  // This string becomes a `createFolder` argument and the parent of every move
+  // target. `normalizePath` does not resolve `..`, so `../outside` would be
+  // handed straight to the adapter. Whether a given adapter honours that is not
+  // something to discover by shipping, and a folder setting has no legitimate
+  // reason to contain a traversal segment — refuse one outright.
+  if (hasTraversalSegment(s.attachmentFolder as string)) {
+    s.attachmentFolder = defaults.attachmentFolder;
+  }
   if (typeof s.licenseKey !== "string") s.licenseKey = "";
 
   const weights = (typeof s.severityWeights === "object" && s.severityWeights !== null
@@ -330,6 +348,18 @@ export function normalizeSettings(
     .filter(hasStringId)
     .map((r) => normalizeRule(r as RawSettings, defaults));
 
-  s.version = SCHEMA_VERSION;
+  // NEVER lower the recorded schema version. `migrateRawSettings` deliberately
+  // leaves a blob written by a NEWER plugin untouched, and the loader skips the
+  // immediate save for one — but stamping SCHEMA_VERSION here undid both as soon
+  // as anything else triggered a save. A user who opened an older build once
+  // would be left with future-schema data labelled as the old schema, and the
+  // next launch of the newer build would re-run migrations over already-migrated
+  // data. No migration past the current version exists yet, which is precisely
+  // why this is worth closing now rather than after one does.
+  const recorded =
+    typeof settings.version === "number" && Number.isFinite(settings.version)
+      ? Math.floor(settings.version)
+      : 0;
+  s.version = Math.max(SCHEMA_VERSION, recorded);
   return settings;
 }

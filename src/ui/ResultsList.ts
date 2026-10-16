@@ -54,6 +54,14 @@ function severityTier(severity: number): SeverityTier {
  */
 const INITIAL_ROWS = 50;
 
+/**
+ * How many members of one duplicate cluster to build up front. Same reasoning as
+ * {@link INITIAL_ROWS}, applied inside a cluster — which previously had no bound
+ * at all, so a single cluster of identical copies could render thousands of rows
+ * on first paint however small the page budget was.
+ */
+const CLUSTER_ROWS = 12;
+
 /** Either a standalone issue or a group of byte-identical copies. */
 type ListEntry = AttachmentIssue | AttachmentIssue[];
 
@@ -119,7 +127,9 @@ export function renderResultsList(
       const entry = entries[shown];
       if (Array.isArray(entry)) {
         renderCluster(frag, plugin, entry, opts, rowsByPath);
-        rowsThisPage += entry.length;
+        // Only the rows actually built count toward the page budget; the rest of
+        // the cluster is behind its own "show more".
+        rowsThisPage += Math.min(entry.length, CLUSTER_ROWS);
       } else {
         renderRow(frag, plugin, entry, opts, rowsByPath);
         rowsThisPage++;
@@ -193,9 +203,37 @@ function renderCluster(
     cls: "attachment-audit-cluster-waste",
     text: `${formatBytes(wasted)} wasted`,
   });
+  // Members are PAGED like the top-level list, not rendered all at once.
+  //
+  // The outer loop pages by rows and counts `entry.length` toward the budget, but
+  // it counts it AFTER this function has already built every row, so the budget
+  // could not bound a cluster. One `cp -r` of a photo library produces a single
+  // cluster of thousands of byte-identical copies, and that cluster alone put
+  // thousands of rows — each with four `setIcon` SVGs and several tab stops — into
+  // the DOM on first paint, inside a ~300px sidebar.
   const body = wrap.createDiv({ cls: "attachment-audit-cluster-body" });
-  for (const issue of group) renderRow(body, plugin, issue, opts, rowsByPath);
+  const more = wrap.createDiv({ cls: "attachment-audit-cluster-more" });
+  let drawn = 0;
+  const drawMembers = (): void => {
+    const frag = createFragment();
+    const until = Math.min(group.length, drawn + CLUSTER_ROWS);
+    for (; drawn < until; drawn++) renderRow(frag, plugin, group[drawn], opts, rowsByPath);
+    body.appendChild(frag);
+    more.empty();
+    const left = group.length - drawn;
+    if (left > 0) {
+      const button = more.createEl("button", { text: `Show ${left} more ${plural(left, "copy")}` });
+      button.addEventListener("click", drawMembers);
+    }
+  };
+  drawMembers();
   parent.appendChild(wrap);
+}
+
+/** English plural for the cluster's "show more" button. */
+function plural(n: number, word: string): string {
+  if (n === 1) return word;
+  return word === "copy" ? "copies" : `${word}s`;
 }
 
 function renderRow(

@@ -55,7 +55,7 @@ export function buildMarkdownReport(input: ReportInput): string {
       const label =
         issue.exists === false
           ? `- \`${issue.attachmentPath}\``
-          : `- [[${issue.attachmentPath}]]`;
+          : `- ${linkOrCode(issue.attachmentPath)}`;
       const why = issue.details ?? issue.reason;
       // Size is meaningless for a file that isn't there.
       const size = issue.exists === false ? "" : ` (${formatBytes(issue.sizeBytes)})`;
@@ -65,4 +65,17 @@ export function buildMarkdownReport(input: ReportInput): string {
   }
 
   return lines.join("\n");
+}
+
+/**
+ * A wikilink to `path`, or a code span when the path cannot survive one.
+ *
+ * `[`, `]`, `#` and `|` all terminate or re-interpret a wikilink: a report line
+ * for `assets/a|b.png` rendered as a link to `assets/a` aliased `b.png`, and
+ * `a#1.png` as a link to `a` with a heading anchor. All four characters are legal
+ * in filenames and arrive routinely with files imported from outside Obsidian, so
+ * the report must stop claiming a link it cannot form.
+ */
+function linkOrCode(path: string): string {
+  return /[[\]#|]/.test(path) ? "`" + path + "`" : `[[${path}]]`;
 }

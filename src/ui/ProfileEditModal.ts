@@ -1,4 +1,5 @@
 import { App, Modal, Notice, Setting } from "obsidian";
+import { MAX_THRESHOLD_KB } from "../core/settings/limits";
 import type AttachmentManagerPlugin from "../main";
 import type { ScanProfile, IssueType, SortMode } from "../types";
 import { ISSUE_TYPES, ISSUE_TYPE_LABELS } from "../types";
@@ -131,8 +132,7 @@ export class ProfileEditModal extends Modal {
   }
 }
 
-/** Largest threshold accepted, in KB (64 TB) — matches the load-time clamp. */
-const MAX_THRESHOLD_KB = 1024 * 1024 * 64;
+
 
 /** Parse an optional MB override into KB; blank/invalid yields undefined (use global). */
 function toMbKb(value: string): number | undefined {

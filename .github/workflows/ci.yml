@@ -1,0 +1,36 @@
+name: CI
+
+# `npm test` is a hard gate for this plugin and, until now, only ran when someone
+# remembered to run it. It is also where three load-bearing invariants are
+# enforced that nothing else checks: the `src/core` purity rule (an ESLint
+# `no-restricted-imports` boundary), the regex screen's soundness and budget
+# property tests, and the manifest/product-id contract that decides whether every
+# issued license key still works.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # Typecheck + the Obsidian review bot's own ruleset + the core-purity
+      # boundary, then the unit suite.
+      - run: npm test
+
+      # A release ships main.js, so a build that only works locally is not a
+      # release. Build it here too, and fail if it produces nothing.
+      - run: npm run build
+      - name: Check the bundle was produced
+        run: test -s main.js

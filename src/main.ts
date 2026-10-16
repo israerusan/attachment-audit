@@ -41,6 +41,7 @@ import { buildMarkdownReport } from "./core/reports/markdownReport";
 import { issueKey, issueKeyPath, issueKeyType, newId } from "./core/utils/ids";
 import {
   appendBatch,
+  MAX_JOURNAL_ENTRIES,
   replaceBatch,
   restorability,
   HASH_MAX_BYTES,
@@ -50,7 +51,9 @@ import {
   type JournalEntry,
 } from "./core/journal/actionJournal";
 import {
-  couldBeTrashedAs,
+  indexTrashListing,
+  trashCandidatePaths,
+  type TrashIndex,
   explainOutcome,
   selectTrashCandidate,
   type TrashCandidate,
@@ -74,7 +77,50 @@ type AppInternals = { commands?: CommandsApi };
 /** Obsidian's local trash, relative to the vault root. */
 const TRASH_DIR = ".trash";
 
+/**
+ * How many recorded mutations may accumulate before the cleanup history is
+ * persisted. See {@link AttachmentManagerPlugin.recordInBatch}.
+ */
+const JOURNAL_FLUSH_EVERY = 25;
+
+/**
+ * Above this, a restore moves the file instead of reading and rewriting it.
+ * See {@link AttachmentManagerPlugin.restoreFromLocalTrash}.
+ */
+const RESTORE_COPY_MAX_BYTES = 64 * 1024 * 1024;
+
 /** Where a restored file actually landed, or why it could not be put back. */
+/**
+ * The live two-signal verdict for one destructive action: which paths passed the
+ * snapshot gates, and which of those a source file still mentions. Kept as one
+ * object so the loop that mutates the vault consults exactly the set the mention
+ * re-check covered, never a freshly re-derived one.
+ */
+interface TrashGate {
+  eligible: Set<string>;
+  mentioned: Set<string>;
+  /** Value of `mutationEpoch` when this verdict was established. */
+  epoch: number;
+}
+
+/**
+ * A journal batch that is open for appending while its action is still running.
+ *
+ * It is spliced into `settings.journal` on the FIRST recorded entry, not at the
+ * end, so an interrupted batch leaves a usable partial history instead of none.
+ */
+interface OpenBatch {
+  batch: JournalBatch;
+  /** Whether `batch` has been inserted into `settings.journal` yet. */
+  attached: boolean;
+  /** Entries since the last persist, used to bound how often data.json is written. */
+  pending: number;
+  /** Files trashed that could NOT be recorded, so the user can be told. */
+  unrecorded: number;
+  /** Set once the per-batch entry ceiling is hit; no further entries are kept. */
+  full: boolean;
+}
+
 interface RestoreOutcome {
   /** The path the file now occupies — NOT necessarily its original one. */
   path: string | null;
@@ -530,6 +576,12 @@ export default class AttachmentManagerPlugin extends Plugin {
   }
 
   async unexcludeAttachment(path: string): Promise<void> {
+    // Reached from a Notice button that outlives the Notice's own 6 seconds, and
+    // can therefore outlive the plugin. Writing here after unload recreates
+    // `.obsidian/plugins/attachment-audit/data.json` for a plugin the user has
+    // just disabled or uninstalled — the same hazard `onunload` sets this flag to
+    // prevent for a running scan.
+    if (this.unloaded) return;
     this.settings.excludedPaths = this.settings.excludedPaths.filter((p) => p !== path);
     await this.saveSettings();
     await this.runScan(this.lastResult?.profileId);
@@ -815,6 +867,22 @@ export default class AttachmentManagerPlugin extends Plugin {
    */
   private mentionBasis: Set<string> | null = null;
 
+  /**
+   * Bumped whenever a vault event could have introduced a new reference.
+   *
+   * A destructive batch establishes the two-signal safety verdict once, then
+   * mutates files one at a time; on a large batch that loop runs for seconds or
+   * minutes. Anything arriving inside that window — Obsidian Sync landing a note
+   * from another device, the user typing an embed, another plugin writing a file
+   * — was invisible to the batch, so a file that became referenced DURING the
+   * cleanup was still trashed. The verdict was fresh when taken and stale when
+   * used.
+   *
+   * This counter is what makes staleness detectable: the loop compares it against
+   * the value at gate time and re-establishes the gate when it has moved.
+   */
+  private mutationEpoch = 0;
+
   /** Force the next live re-check to read every source. */
   private invalidateMentionBasis(): void {
     this.mentionBasis = null;
@@ -822,8 +890,12 @@ export default class AttachmentManagerPlugin extends Plugin {
 
   /** Record a source file whose content may now reference something new. */
   private noteSourceChanged(path: string): void {
-    if (this.mentionBasis === null) return; // already doing a full re-read
-    if (isMentionSourcePath(path)) this.mentionBasis.add(path);
+    if (isMentionSourcePath(path)) {
+      // Counted even when a full re-read is already pending: the epoch's job is
+      // to say "something changed since you looked", which is true either way.
+      this.mutationEpoch++;
+      if (this.mentionBasis !== null) this.mentionBasis.add(path);
+    }
   }
 
   /**
@@ -837,55 +909,9 @@ export default class AttachmentManagerPlugin extends Plugin {
       new Notice(`${PRODUCT_NAME}: a scan is running — try again in a moment.`);
       return [];
     }
-    const inbound = this.inboundMap();
-    const unused = this.unusedPathSet();
-    const bytesByPath = new Map(issues.map((i) => [i.attachmentPath, i.sizeBytes]));
-    const nameByPath = new Map(issues.map((i) => [i.attachmentPath, i.attachmentName]));
-    // Re-check the SECOND signal (content mention) live, so a canvas/HTML/
-    // frontmatter reference added since the scan can't get a file trashed.
-    const candidatePaths = unique(issues.map((i) => i.attachmentPath)).filter(
-      (p) => this.app.vault.getFileByPath(p) !== null && (inbound.get(p) ?? 0) <= 0 && unused.has(p)
-    );
-    const mentioned = await findMentionedAttachments(
-      this.app,
-      candidatePaths.map((p) => ({ path: p, name: nameByPath.get(p) ?? attachmentBaseName(p) })),
-      this.changedSourcesSince(),
-      this.scanStartedMs()
-    );
-    const trashed: string[] = [];
-    const journalEntries: JournalEntry[] = [];
-    // Read ONCE, before anything is trashed: a user changing "Deleted files"
-    // mid-batch must not leave earlier files recorded with the wrong destination.
-    const destination = this.trashDestination();
-    let skipped = 0;
-    let failed = 0;
-    for (const path of unique(issues.map((i) => i.attachmentPath))) {
-      const file = this.app.vault.getFileByPath(path);
-      if (!file) { skipped++; continue; }
-      // Skip anything newly referenced (by link OR content) or not confirmed unused.
-      if ((inbound.get(path) ?? 0) > 0 || !unused.has(path) || mentioned.has(path)) { skipped++; continue; }
-      try {
-        // Size and mtime as they are NOW, not as the scan saw them. These are the
-        // identity gate when finding the file again in `.trash`, and a file edited
-        // between the scan and the trash would otherwise be unidentifiable.
-        const sizeBytes = file.stat.size;
-        const mtime = file.stat.mtime;
-        // Read BEFORE the trash: afterwards the file is somewhere we would have
-        // to guess at, which is the whole problem this hash exists to remove.
-        const headHash = await this.maybeHashHead(file);
-        await this.app.fileManager.trashFile(file);
-        trashed.push(path);
-        journalEntries.push({ from: path, sizeBytes, mtime, headHash });
-      } catch (err) {
-        console.error(`Attachment Audit: could not trash ${path}`, err);
-        failed++;
-      }
-    }
-    const reclaimed = trashed.reduce((s, p) => s + (bytesByPath.get(p) ?? 0), 0);
-    await this.recordBatch("trash", journalEntries, destination);
-    this.reportBulk("Trashed", trashed.length, skipped, failed, reclaimed);
-    await this.recordTrashOutcome(trashed.length, reclaimed, single);
-    return trashed;
+    const paths = unique(issues.map((i) => i.attachmentPath));
+    const gate = await this.openTrashGate(paths, issues);
+    return await this.trashGatedPaths(paths, gate, issues, single);
   }
 
   /**
@@ -902,13 +928,14 @@ export default class AttachmentManagerPlugin extends Plugin {
     }
     const inbound = this.inboundMap();
     const unused = this.unusedPathSet();
-    const bytesByPath = new Map(selected.map((i) => [i.attachmentPath, i.sizeBytes]));
-    const toTrash = selectDuplicateCopiesToTrash(
-      selected,
-      this.lastResult?.issues ?? [],
-      unused,
-      inbound,
-      (p) => this.app.vault.getFileByPath(p) !== null
+    const toTrash = unique(
+      selectDuplicateCopiesToTrash(
+        selected,
+        this.lastResult?.issues ?? [],
+        unused,
+        inbound,
+        (p) => this.app.vault.getFileByPath(p) !== null
+      )
     );
 
     if (toTrash.length === 0) {
@@ -918,24 +945,104 @@ export default class AttachmentManagerPlugin extends Plugin {
       return [];
     }
 
-    const nameByPath = new Map(selected.map((i) => [i.attachmentPath, i.attachmentName]));
-    // Live second-signal re-check before trashing any copy.
+    const gate = await this.openTrashGate(toTrash, selected, inbound, unused);
+    return await this.trashGatedPaths(toTrash, gate, selected, false);
+  }
+
+  /**
+   * Re-establish the two-signal safety gate for a set of paths, immediately before
+   * anything is mutated.
+   *
+   * The scan's verdict is a snapshot; this is the live re-check. A canvas embed,
+   * HTML `<img src>` or frontmatter path added since the scan never appears in
+   * `resolvedLinks`, so the content-mention pass is the only thing that can see it.
+   */
+  private async openTrashGate(
+    paths: string[],
+    issues: AttachmentIssue[],
+    inbound: Map<string, number> = this.inboundMap(),
+    unused: Set<string> = this.unusedPathSet()
+  ): Promise<TrashGate> {
+    const nameByPath = new Map(issues.map((i) => [i.attachmentPath, i.attachmentName]));
+    // Only paths that pass the snapshot gates are worth re-checking — and the
+    // trash loop then intersects against THIS set rather than re-testing the
+    // predicates itself. That ordering matters: the loop used to re-test them
+    // against a fresh `getFileByPath`, so a path absent when the mention check was
+    // assembled but present by the time the loop reached it could be trashed
+    // without ever having been mention-checked at all.
+    const eligible = paths.filter(
+      (p) =>
+        this.app.vault.getFileByPath(p) !== null && (inbound.get(p) ?? 0) <= 0 && unused.has(p)
+    );
     const mentioned = await findMentionedAttachments(
       this.app,
-      unique(toTrash).map((p) => ({ path: p, name: nameByPath.get(p) ?? attachmentBaseName(p) })),
+      eligible.map((p) => ({ path: p, name: nameByPath.get(p) ?? attachmentBaseName(p) })),
       this.changedSourcesSince(),
       this.scanStartedMs()
     );
-    const trashed: string[] = [];
-    const journalEntries: JournalEntry[] = [];
+    return { eligible: new Set(eligible), mentioned, epoch: this.mutationEpoch };
+  }
+
+  /**
+   * The ONE loop that trashes files. Both bulk actions route through it, so every
+   * safety property here holds for both. It used to be copy-pasted, which meant
+   * every change to the most dangerous code in the product had to be made twice
+   * and a miss would be both silent and destructive.
+   *
+   * The journal is written INCREMENTALLY. Accumulating entries in a local array
+   * and recording them after the loop meant an interruption — a force-quit, a
+   * mobile app killed in the background, the plugin disabled — left every
+   * already-trashed file with no record of where it came from. Obsidian's `.trash`
+   * is flat, so the original folder of each file is then unrecoverable by any
+   * means, which is exactly the outcome this plugin exists to prevent.
+   */
+  private async trashGatedPaths(
+    paths: string[],
+    gate: TrashGate,
+    issues: AttachmentIssue[],
+    single: boolean
+  ): Promise<string[]> {
+    let live = gate;
+    const bytesByPath = new Map(issues.map((i) => [i.attachmentPath, i.sizeBytes]));
+    // Read ONCE, before anything is trashed: a user changing "Deleted files"
+    // mid-batch must not leave earlier files recorded with the wrong destination.
     const destination = this.trashDestination();
+    const batch = this.openJournalBatch("trash", destination);
+    const trashed: string[] = [];
     let skipped = 0;
     let failed = 0;
-    for (const path of unique(toTrash)) {
+    let interrupted = false;
+
+    for (const path of paths) {
+      // Every iteration mutates the vault, so every iteration is also an abort
+      // point. The scan has always treated unload this way; this loop did not, and
+      // kept deleting files on behalf of a plugin the user had just disabled.
+      if (this.unloaded) {
+        interrupted = true;
+        break;
+      }
       const file = this.app.vault.getFileByPath(path);
-      if (!file) { skipped++; continue; }
-      if ((inbound.get(path) ?? 0) > 0 || !unused.has(path) || mentioned.has(path)) { skipped++; continue; }
+      if (!file) {
+        skipped++;
+        continue;
+      }
+      // Re-establish the verdict if ANYTHING changed since it was taken. Doing
+      // this only on a change is what keeps it affordable: the mention re-check
+      // reads just the sources that moved, and the inbound map is one pass over
+      // the already-resolved link graph. A batch during which nothing happens
+      // pays nothing at all.
+      if (this.mutationEpoch !== live.epoch) {
+        live = await this.openTrashGate(remaining(paths, path), issues);
+      }
+      // Skip anything newly referenced (by link OR content) or not confirmed unused.
+      if (!live.eligible.has(path) || live.mentioned.has(path)) {
+        skipped++;
+        continue;
+      }
       try {
+        // Size and mtime as they are NOW, not as the scan saw them. These are the
+        // identity gate when finding the file again in `.trash`, and a file edited
+        // between the scan and the trash would otherwise be unidentifiable.
         const sizeBytes = file.stat.size;
         const mtime = file.stat.mtime;
         // Read BEFORE the trash: afterwards the file is somewhere we would have
@@ -943,16 +1050,26 @@ export default class AttachmentManagerPlugin extends Plugin {
         const headHash = await this.maybeHashHead(file);
         await this.app.fileManager.trashFile(file);
         trashed.push(path);
-        journalEntries.push({ from: path, sizeBytes, mtime, headHash });
+        await this.recordInBatch(batch, { from: path, sizeBytes, mtime, headHash });
       } catch (err) {
         console.error(`Attachment Audit: could not trash ${path}`, err);
         failed++;
       }
     }
-    const reclaimed = trashed.reduce((s, p) => s + (bytesByPath.get(p) ?? 0), 0);
-    await this.recordBatch("trash", journalEntries, destination);
+
+    const reclaimed = trashed.reduce((sum, p) => sum + (bytesByPath.get(p) ?? 0), 0);
+    await this.closeJournalBatch(batch);
     this.reportBulk("Trashed", trashed.length, skipped, failed, reclaimed);
-    await this.recordTrashOutcome(trashed.length, reclaimed, false);
+    if (batch.unrecorded > 0) {
+      new Notice(
+        `${PRODUCT_NAME}: ${plural(batch.unrecorded, "file")} could not be added to the cleanup history and ${batch.unrecorded === 1 ? "is" : "are"} not restorable from here — look in the trash.`,
+        10000
+      );
+    }
+    if (interrupted) {
+      new Notice(`${PRODUCT_NAME}: cleanup stopped early because the plugin was unloaded.`);
+    }
+    await this.recordTrashOutcome(trashed.length, reclaimed, single);
     return trashed;
   }
 
@@ -974,22 +1091,34 @@ export default class AttachmentManagerPlugin extends Plugin {
       return [];
     }
     const normFolder = normalizePath(folder);
-    if (!this.app.vault.getAbstractFileByPath(normFolder)) {
+    // `getFolderByPath`, not `getAbstractFileByPath`: the latter also answers for a
+    // FILE at that path, so a vault containing a file literally named `assets`
+    // would skip the create and then fail every move against it.
+    if (!this.app.vault.getFolderByPath(normFolder)) {
       try {
         await this.app.vault.createFolder(normFolder);
-      } catch {
-        /* may already exist from a concurrent op */
+      } catch (err) {
+        // A create that failed for a real reason (an existing file of that name,
+        // an unwritable path) makes every move below fail one by one, and the
+        // report then blames the files. Say it once, here, with the cause.
+        if (!this.app.vault.getFolderByPath(normFolder)) {
+          console.error(`Attachment Audit: could not create "${normFolder}"`, err);
+          new Notice(`${PRODUCT_NAME}: could not create the folder "${folder}" — nothing was moved.`);
+          return [];
+        }
       }
     }
     const moved: string[] = [];
     // Both endpoints, so the move can be reversed. `moved` alone only carries the
     // destination, which is not enough to put anything back.
-    const journalEntries: JournalEntry[] = [];
+    const batch = this.openJournalBatch("move");
     const inSubfolder: string[] = [];
+    let interrupted = false;
     let skipped = 0;
     let failed = 0;
     const folderPrefix = normFolder + "/";
     for (const path of unique(issues.map((i) => i.attachmentPath))) {
+      if (this.unloaded) { interrupted = true; break; }
       const file = this.app.vault.getFileByPath(path);
       if (!file) { skipped++; continue; }
       // A file already SOMEWHERE under the attachment folder is left alone.
@@ -1009,16 +1138,26 @@ export default class AttachmentManagerPlugin extends Plugin {
       try {
         const sizeBytes = file.stat.size;
         const mtime = file.stat.mtime;
+        // Recorded for moves too, not just for trash. `reverseMove` identified the
+        // file to put back by SIZE alone, so if the user later deleted the moved
+        // file and happened to leave a different file of the same size at that
+        // path, the undo relocated a stranger — and rewrote every link in the
+        // vault to point at it. The machinery to prevent that already existed and
+        // was simply not wired here.
+        const headHash = await this.maybeHashHead(file);
         await this.app.fileManager.renameFile(file, target);
         moved.push(target);
-        journalEntries.push({ from: path, to: target, sizeBytes, mtime });
+        await this.recordInBatch(batch, { from: path, to: target, sizeBytes, mtime, headHash });
       } catch (err) {
         console.error(`Attachment Audit: could not move ${path}`, err);
         failed++;
       }
     }
-    await this.recordBatch("move", journalEntries);
+    await this.closeJournalBatch(batch);
     this.reportBulk("Moved", moved.length, skipped, failed);
+    if (interrupted) {
+      new Notice(`${PRODUCT_NAME}: move stopped early because the plugin was unloaded.`);
+    }
     if (inSubfolder.length > 0) {
       new Notice(
         `${PRODUCT_NAME}: left ${inSubfolder.length} file${inSubfolder.length === 1 ? "" : "s"} ` +
@@ -1060,18 +1199,26 @@ export default class AttachmentManagerPlugin extends Plugin {
       new Notice(`${PRODUCT_NAME}: a file named "${attachmentBaseName(target)}" already exists.`);
       return null;
     }
+    const sizeBytes = file.stat.size;
+    const mtime = file.stat.mtime;
+    // Taken BEFORE the rename, so `reverseMove` can verify identity by content
+    // rather than by size alone.
+    const headHash = await this.maybeHashHead(file);
     try {
-      const sizeBytes = file.stat.size;
-      const mtime = file.stat.mtime;
       await this.app.fileManager.renameFile(file, target);
-      await this.recordBatch("rename", [{ from: path, to: target, sizeBytes, mtime }]);
-      new Notice(`${PRODUCT_NAME}: renamed to ${attachmentBaseName(target)}.`);
-      return target;
     } catch (err) {
       console.error(`Attachment Audit: could not rename ${path}`, err);
       new Notice(`${PRODUCT_NAME}: rename failed. See the console.`);
       return null;
     }
+    // Outside the try, deliberately. The rename has succeeded by this point, and
+    // recording it is bookkeeping: a failure here previously ran the catch above,
+    // so the user was told "rename failed" about a file that HAD been renamed and
+    // the caller skipped its refresh, leaving the dashboard pointing at a path
+    // that no longer existed. `recordBatch` now swallows its own write errors.
+    await this.recordBatch("rename", [{ from: path, to: target, sizeBytes, mtime, headHash }]);
+    new Notice(`${PRODUCT_NAME}: renamed to ${attachmentBaseName(target)}.`);
+    return target;
   }
 
   // --- Cleanup history ------------------------------------------------------
@@ -1095,7 +1242,92 @@ export default class AttachmentManagerPlugin extends Plugin {
       entries,
     };
     this.settings.journal = appendBatch(this.settings.journal, batch, this.settings.journalLimit);
-    await this.saveSettings();
+    await this.saveJournal();
+  }
+
+  /**
+   * Begin a batch that will be appended to as its action proceeds.
+   *
+   * Nothing is written until the first entry lands, so an action that mutates
+   * nothing leaves no empty record behind.
+   */
+  private openJournalBatch(op: CleanupOp, trashDestination?: TrashDestination): OpenBatch {
+    return {
+      batch: {
+        id: newId("batch"),
+        at: new Date().toISOString(),
+        op,
+        trashDestination,
+        entries: [],
+      },
+      attached: false,
+      pending: 0,
+      unrecorded: 0,
+      full: false,
+    };
+  }
+
+  /**
+   * Record one completed mutation, persisting periodically rather than at the end.
+   *
+   * The flush interval is a deliberate compromise. Saving after every file would
+   * put a full `data.json` serialization between each `trashFile` call; saving
+   * only at the end is what made an interrupted batch unrecoverable. Losing at
+   * most {@link JOURNAL_FLUSH_EVERY} records to a hard kill is the remaining
+   * exposure, against a whole batch before.
+   */
+  private async recordInBatch(open: OpenBatch, entry: JournalEntry): Promise<void> {
+    if (this.settings.journalLimit <= 0) return; // history off: nothing to record
+    if (open.full || open.batch.entries.length >= MAX_JOURNAL_ENTRIES) {
+      // The journal's total-entry ceiling exists because `saveSettings`
+      // re-serializes every setting on routine UI actions, so an unbounded batch
+      // turns each click into a multi-megabyte write. The newest batch used to be
+      // exempt from it entirely, which reopened exactly that hole. Bounded here
+      // instead, and the caller tells the user rather than silently dropping it.
+      open.full = true;
+      open.unrecorded++;
+      return;
+    }
+    open.batch.entries.push(entry);
+    if (!open.attached) {
+      this.settings.journal = appendBatch(
+        this.settings.journal,
+        open.batch,
+        this.settings.journalLimit
+      );
+      open.attached = true;
+    }
+    open.pending++;
+    if (open.pending >= JOURNAL_FLUSH_EVERY) {
+      open.pending = 0;
+      await this.saveJournal();
+    }
+  }
+
+  /** Persist whatever the batch collected. Safe to call on an empty batch. */
+  private async closeJournalBatch(open: OpenBatch): Promise<void> {
+    if (open.attached && open.pending > 0) {
+      open.pending = 0;
+      await this.saveJournal();
+    }
+  }
+
+  /**
+   * Persist settings for a journal write, swallowing failure.
+   *
+   * The files are already gone by the time this runs, so a rejected write (full
+   * disk, read-only vault, a sync client holding the file) must not propagate:
+   * it used to travel out of the bulk action past the completion Notice AND past
+   * the dashboard refresh, through a `void ...then()` call site, so the user saw
+   * the confirm dialog close and nothing else happen while their attachments
+   * disappeared. An unrecorded cleanup is bad; an unreported one is worse.
+   */
+  private async saveJournal(): Promise<void> {
+    try {
+      await this.saveSettings();
+    } catch (err) {
+      console.error("Attachment Audit: could not write the cleanup history", err);
+    }
   }
 
   /**
@@ -1138,17 +1370,23 @@ export default class AttachmentManagerPlugin extends Plugin {
     // Walk `.trash` ONCE for the whole batch. Listing it per entry made a
     // 500-file restore do 500 recursive walks of a directory holding everything
     // the user has ever deleted.
-    let trashListing: string[] = [];
+    let trashIndex: TrashIndex = new Map();
+    let trashCount = 0;
     if (batch.op === "trash") {
       const adapter = this.app.vault.adapter;
       try {
         if (adapter && (await adapter.exists(TRASH_DIR))) {
-          trashListing = await this.listTrashRecursive(adapter);
+          const listing = await this.listTrashRecursive(adapter);
+          trashCount = listing.length;
+          // Indexed ONCE for the whole batch. See `indexTrashListing`: the
+          // per-entry rescan this replaces was 145 s of frozen UI on a large
+          // journal against a large trash.
+          trashIndex = indexTrashListing(listing);
         }
       } catch (err) {
         console.error("Attachment Audit: could not read the vault's trash", err);
       }
-      if (trashListing.length === 0) {
+      if (trashCount === 0) {
         this.restoringBatches.delete(batchId);
         new Notice(`${PRODUCT_NAME}: the vault's trash is empty or unreadable — nothing to put back.`);
         return { restored, failed };
@@ -1157,6 +1395,19 @@ export default class AttachmentManagerPlugin extends Plugin {
     // Per-entry results, so re-running a partial restore does not search for —
     // or pull a second file out of the trash for — an entry already put back.
     const restoredTo = new Map<string, string>();
+    // Basenames this batch trashed more than once. For those, name and size
+    // cannot tell the entries apart and only a content hash can — see the
+    // `requireContentMatch` note in `selectTrashCandidate`.
+    const basenameCounts = new Map<string, number>();
+    for (const entry of batch.entries) {
+      const name = attachmentBaseName(entry.from);
+      basenameCounts.set(name, (basenameCounts.get(name) ?? 0) + 1);
+    }
+    // Trash paths already handed to an earlier entry in this batch. Relying on
+    // the subsequent `remove` to make them disappear is not enough: the remove
+    // can fail, and a candidate consumed but still present would be offered to a
+    // second entry.
+    const consumedTrashPaths = new Set<string>();
     let alreadyDone = 0;
     try {
       // Reverse order, so a batch that moved A onto B's old path undoes B first.
@@ -1168,7 +1419,12 @@ export default class AttachmentManagerPlugin extends Plugin {
         try {
           const outcome =
             batch.op === "trash"
-              ? await this.restoreFromLocalTrash(entry, trashListing)
+              ? await this.restoreFromLocalTrash(
+                  entry,
+                  trashIndex,
+                  consumedTrashPaths,
+                  (basenameCounts.get(attachmentBaseName(entry.from)) ?? 0) > 1
+                )
               : await this.reverseMove(entry);
           if (outcome.path) {
             restored.push(entry.from);
@@ -1240,6 +1496,15 @@ export default class AttachmentManagerPlugin extends Plugin {
     if (file.stat.size !== entry.sizeBytes) {
       return { path: null, reason: "the file there has changed since, so it was left alone" };
     }
+    // Size is circumstantial; content is not. When the move recorded a head hash,
+    // it has to match, or the file sitting at that path is not the one we moved
+    // and undoing would relocate a stranger and re-point the vault's links at it.
+    if (entry.headHash !== undefined) {
+      const now = await this.maybeHashHead(file);
+      if (now !== entry.headHash) {
+        return { path: null, reason: "the file there is not the one that was moved, so it was left alone" };
+      }
+    }
     // Its original home may be occupied now; never overwrite something to undo.
     const target = uniquePath(entry.from, (p) => this.pathExistsCI(p, entry.to));
     if (this.pathExistsCI(target, entry.to)) {
@@ -1261,7 +1526,9 @@ export default class AttachmentManagerPlugin extends Plugin {
    */
   private async restoreFromLocalTrash(
     entry: JournalEntry,
-    listing: readonly string[]
+    trashIndex: TrashIndex,
+    consumedTrashPaths: Set<string>,
+    requireContentMatch: boolean
   ): Promise<RestoreOutcome> {
     const adapter = this.app.vault.adapter;
     if (!adapter) return { path: null, reason: "the vault storage is unavailable" };
@@ -1270,10 +1537,9 @@ export default class AttachmentManagerPlugin extends Plugin {
     // and let the pure selector decide. It identifies or refuses — it never picks
     // a "best guess", because a wrong choice writes a stranger's bytes to a path
     // the user trusts AND consumes the real file from the trash.
-    const wantedName = attachmentBaseName(entry.from);
     const candidates: TrashCandidate[] = [];
-    for (const path of listing) {
-      if (!couldBeTrashedAs(attachmentBaseName(path), wantedName)) continue;
+    for (const path of trashCandidatePaths(trashIndex, attachmentBaseName(entry.from))) {
+      if (consumedTrashPaths.has(path)) continue;
       try {
         const stat = await adapter.stat(path);
         if (!stat || stat.type !== "file") continue;
@@ -1291,13 +1557,20 @@ export default class AttachmentManagerPlugin extends Plugin {
       }
     }
 
-    const outcome = selectTrashCandidate(candidates, {
-      from: entry.from,
-      sizeBytes: entry.sizeBytes,
-      mtime: entry.mtime,
-      headHash: entry.headHash,
-    });
+    const outcome = selectTrashCandidate(
+      candidates,
+      {
+        from: entry.from,
+        sizeBytes: entry.sizeBytes,
+        mtime: entry.mtime,
+        headHash: entry.headHash,
+      },
+      { requireContentMatch }
+    );
     if (!outcome.found) return { path: null, reason: explainOutcome(outcome.reason) };
+    // Claim it before writing, so no later entry in this batch can be handed the
+    // same trashed file even if the `remove` below fails.
+    consumedTrashPaths.add(outcome.found.path);
 
     const target = uniquePath(entry.from, (p) => this.pathExistsCI(p));
     if (this.pathExistsCI(target)) {
@@ -1317,6 +1590,26 @@ export default class AttachmentManagerPlugin extends Plugin {
     // immediately. The cost is a read-plus-write instead of a move; correctness
     // is worth it, and the alternative is a feature that looks broken every time
     // it works.
+    // Above a ceiling, MOVE the bytes rather than copying them through memory.
+    //
+    // The read-plus-write below exists so Obsidian indexes the restored file
+    // immediately, which is worth a copy for an ordinary attachment. It is not
+    // worth it for the multi-gigabyte media this plugin exists to find: holding
+    // the whole file in an ArrayBuffer and then handing a second copy to
+    // `createBinary` either throws — reported to the user as "the file in the
+    // trash could not be read", which is actively misleading — or kills the
+    // window. `restoreBatch` already calls `settleCacheThenRescan`, so the index
+    // catches up either way; the only cost is that the file appears a moment
+    // later rather than instantly.
+    if (outcome.found.size > RESTORE_COPY_MAX_BYTES) {
+      try {
+        await adapter.rename(outcome.found.path, target);
+        return { path: target };
+      } catch (err) {
+        console.error(`Attachment Audit: could not move ${outcome.found.path} back`, err);
+        return { path: null, reason: "it was too large to put back automatically" };
+      }
+    }
     let data: ArrayBuffer;
     try {
       data = await adapter.readBinary(outcome.found.path);
@@ -1364,9 +1657,15 @@ export default class AttachmentManagerPlugin extends Plugin {
     } catch {
       return out;
     }
-    out.push(...listing.files);
+    // Appended one at a time, never `push(...array)`. Spreading puts every
+    // element on the argument stack, which throws RangeError past ~65k — and
+    // `.trash` is the one directory in a vault that accumulates everything the
+    // user has ever deleted, so it is exactly where that limit is reachable. The
+    // throw would land in `restoreBatch`'s catch and degrade cleanup history to a
+    // permanent "the vault's trash is empty or unreadable".
+    for (const f of listing.files) out.push(f);
     for (const folder of listing.folders) {
-      out.push(...(await this.listTrashRecursive(adapter, folder, depth + 1)));
+      for (const f of await this.listTrashRecursive(adapter, folder, depth + 1)) out.push(f);
     }
     return out;
   }
@@ -1459,11 +1758,20 @@ export default class AttachmentManagerPlugin extends Plugin {
   describeMoveAction(count: number): string {
     const folder = this.settings.attachmentFolder.trim();
     const what = count === 1 ? "this file" : `${count} selected files`;
+    // The list of what is NOT rewritten has to match what the safety scan reads.
+    //
+    // It named raw HTML and frontmatter strings only, while `findMentionedAttachments`
+    // also reads CSS snippets and themes, other plugins' data.json, and in-vault
+    // text attachments (SVG, HTML, Excalidraw, drawio, JSON). Obsidian rewrites
+    // none of those either — so the trash action treats a CSS-snippet reference as
+    // sacred enough to abort on, while the move action would quietly break it.
     return (
       `Move ${what} into "${folder}"? ` +
-      "Markdown, wikilink, and canvas links are updated; raw HTML <img src> and " +
-      "frontmatter path strings are not. Files already in that folder — including " +
-      "in its subfolders — are left where they are."
+      "Markdown, wikilink, and canvas links are updated. References Obsidian cannot " +
+      "rewrite are not: raw HTML <img src>, frontmatter path strings, CSS snippets " +
+      "and themes, other plugins' settings, and paths inside SVG, HTML or drawing " +
+      `files. Files already in "${folder}" — including in its subfolders — are left ` +
+      "where they are."
     );
   }
 
@@ -1717,6 +2025,15 @@ class ProfileSuggestModal extends FuzzySuggestModal<ScanProfile> {
   onChooseItem(profile: ScanProfile): void {
     this.onChoose(profile);
   }
+}
+
+/**
+ * `paths` from `from` onward. Used to re-gate only what a batch has left to do,
+ * rather than re-checking files it has already trashed.
+ */
+function remaining(paths: string[], from: string): string[] {
+  const at = paths.indexOf(from);
+  return at <= 0 ? paths : paths.slice(at);
 }
 
 function unique(values: string[]): string[] {

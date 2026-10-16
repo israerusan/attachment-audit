@@ -1,15 +1,11 @@
 import type { App } from "obsidian";
-import { PRO_UPSELL } from "../../product";
+import type { ProFeature } from "../../product";
 import { ProUpsellModal } from "./ProUpsellModal";
 
 /** Anything carrying the resolved Pro entitlement and an app handle. */
 export interface ProHost {
   isPro: boolean;
   app: App;
-}
-
-export function isPro(host: ProHost): boolean {
-  return host.isPro;
 }
 
 /**
@@ -19,7 +15,7 @@ export function isPro(host: ProHost): boolean {
  */
 export function requirePro(
   host: ProHost,
-  feature: keyof typeof PRO_UPSELL,
+  feature: ProFeature,
   action: () => void,
   /** Optional concrete hook shown in the upsell (e.g. the reclaimable total). */
   context?: string

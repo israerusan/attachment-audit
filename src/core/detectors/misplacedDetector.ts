@@ -1,15 +1,14 @@
 import type { AttachmentStat, DetectorHit } from "../../types";
-
-/** True when `path` is the folder itself or lives anywhere beneath it. */
-function isInsideFolder(path: string, folder: string): boolean {
-  return path === folder || path.startsWith(`${folder}/`);
-}
+import { isInsideFolder } from "../scan/folderMatch";
 
 /**
  * Flags an attachment that lives outside the configured attachment folder — a
  * candidate to move so attachments stay organized in one place. A blank folder
  * disables the check (the user hasn't declared where attachments should live).
- * The folder is trimmed and its trailing slash removed for prefix matching.
+ * The folder is trimmed and its trailing slash removed for prefix matching, and
+ * the comparison is case-insensitive: with `assets` configured against a folder
+ * actually named `Assets`, an exact match flagged every attachment in the vault
+ * as misplaced.
  */
 export function misplacedDetector(stat: AttachmentStat, attachmentFolder: string): DetectorHit | null {
   const folder = attachmentFolder.trim().replace(/^\/+|\/+$/g, "");

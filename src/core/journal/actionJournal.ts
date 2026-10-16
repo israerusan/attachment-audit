@@ -162,8 +162,14 @@ export function batchBytes(batch: JournalBatch): number {
 
 export interface Restorability {
   restorable: boolean;
-  /** Why not, phrased for the history UI. Always present when `restorable` is false. */
+  /** Why not, when `restorable` is false. */
   reason?: string;
+  /**
+   * Shown alongside an offered restore that carries a qualification — currently
+   * only "we do not know where these went, so we will look in the vault's trash
+   * and tell you if they are not there".
+   */
+  caveat?: string;
 }
 
 /**
@@ -204,9 +210,23 @@ export function restorability(batch: JournalBatch): Restorability {
         reason: "Your “Deleted files” setting was “Permanently delete”, so these are gone.",
       };
     default:
+      // "unknown" is a gap in OUR knowledge, not evidence about the files.
+      //
+      // It means `trashOption` could not be read — it is not a public API, so any
+      // rename or absence lands here — or that the batch predates the field being
+      // recorded. Treating it as "cannot be restored" made every such batch
+      // permanently unrestorable even while the files sat in `.trash`, and hid
+      // the "Done with this" escape hatch along with the button.
+      //
+      // Looking is safe: `selectTrashCandidate` identifies a file or refuses, so
+      // the worst outcome is the honest "it is no longer in the vault's trash".
+      // The caveat keeps the old message's useful half — the hint that the system
+      // trash is where to look if the search comes up empty.
       return {
-        restorable: false,
-        reason: "Where these files went could not be determined, so they cannot be put back.",
+        restorable: true,
+        caveat:
+          "Where these went was not recorded. Attachment Audit will look in the vault’s trash; " +
+          "if they are not there, check your system trash.",
       };
   }
 }

@@ -43,7 +43,8 @@ export default tseslint.config(
 			// be wrong, and the actual review does not flag these strings.
 			"obsidianmd/ui/sentence-case": "off",
 			// Advises the declarative settings API added in Obsidian 1.13.0; this plugin
-			// targets minAppVersion 1.4.0 and uses the classic display() settings tab.
+			// targets minAppVersion 1.5.7 (see manifest.json) and uses the classic
+			// display() settings tab.
 			"obsidianmd/settings-tab/prefer-setting-definitions": "off",
 		},
 	},

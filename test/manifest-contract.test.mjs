@@ -35,4 +35,23 @@ assert.ok(/^\d+\.\d+\.\d+$/.test(manifest.version), "manifest.version must be x.
 assert.equal(manifest.version, pkg.version, "manifest.json and package.json versions must match");
 assert.ok(versions[manifest.version], `versions.json must contain an entry for ${manifest.version}`);
 
+// --- The product id must agree EVERYWHERE -------------------------------------
+// Three independent copies of this string decide whether a paid key works:
+// `manifest.id` names the install folder, `PRODUCT_ID` is signed into every
+// license and is what `verifyLicense` compares against, and the signer writes the
+// `product` field. A drift between any two is silent — the suite passed, the
+// plugin loaded, and every issued key failed with a message indistinguishable
+// from a forgery. `manifest.id` also names the install folder that the scan skips
+// when reading other plugins' data.json, so a drift there quietly reintroduces
+// the 1.2.1 bug where the plugin suppressed its own detection.
+const productSrc = fs.readFileSync(path.join(root, "src", "product.ts"), "utf8");
+const declaredId = /export const PRODUCT_ID = "([^"]+)"/.exec(productSrc)?.[1];
+assert.equal(declaredId, manifest.id, "PRODUCT_ID in src/product.ts must equal manifest.id");
+
+const signerSrc = fs.readFileSync(path.join(root, "scripts", "generate-license.mjs"), "utf8");
+assert.ok(
+	/product:\s*manifest\.id/.test(signerSrc),
+	"the license signer must read the product id from manifest.json, not restate it"
+);
+
 console.log("ok  manifest-contract.test.mjs");

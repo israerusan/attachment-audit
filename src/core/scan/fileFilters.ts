@@ -1,18 +1,17 @@
 // Pure path/tag filtering for the vault scan. No Obsidian API — folder matching
 // is prefix-based on the vault-relative path so it runs the same in tests.
+//
+// Path and folder comparison is CASE-INSENSITIVE, via `folderMatch`. These
+// entries are free-typed by the user; see that module for why an exact match was
+// the wrong rule here.
+
+import { isInsideFolder, samePath } from "./folderMatch";
 
 /** Which notes the scan should skip, by exact path, folder subtree, or tag. */
 export interface ExclusionConfig {
   excludedFolders: string[];
   excludedPaths: string[];
   excludedTags: string[];
-}
-
-/** True when a path is the folder itself or lives anywhere beneath it. */
-function isInsideFolder(path: string, folder: string): boolean {
-  const trimmed = folder.trim();
-  if (!trimmed) return false;
-  return path === trimmed || path.startsWith(`${trimmed}/`);
 }
 
 /** Normalize a tag for comparison: trimmed, lower-cased, without a leading '#'. */
@@ -32,11 +31,15 @@ export function isExcluded(
   config: ExclusionConfig
 ): boolean {
   for (const excluded of config.excludedPaths) {
-    if (excluded.trim() && path === excluded.trim()) return true;
+    if (samePath(path, excluded)) return true;
   }
   for (const folder of config.excludedFolders) {
     if (isInsideFolder(path, folder)) return true;
   }
+  // Guarded, not just filtered. This function runs once per vault file, and
+  // attachments carry no tags at all — so on a 70,000-file vault the two array
+  // allocations below were 140,000 guaranteed-empty throwaway arrays per scan.
+  if (config.excludedTags.length === 0 || tags.length === 0) return false;
   const excludedTags = config.excludedTags
     .map(normalizeTag)
     .filter((t) => t.length > 0);
@@ -58,6 +61,9 @@ export function includedByFolders(
   path: string,
   includedFolders: string[]
 ): boolean {
+  // Same reasoning as above: called once per vault file, and the common case is
+  // no include restriction at all, so check that before allocating anything.
+  if (includedFolders.length === 0) return true;
   const folders = includedFolders.filter((f) => f.trim().length > 0);
   if (folders.length === 0) return true;
   return folders.some((folder) => isInsideFolder(path, folder));

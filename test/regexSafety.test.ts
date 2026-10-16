@@ -35,8 +35,31 @@ assert.ok(!safe("^" + "a+".repeat(16) + "$"), "chained a+ (measured 457ms at 27 
 assert.ok(!safe("^" + ".*".repeat(16) + "x$"), "chained .* (measured 91s at 27 chars)");
 assert.ok(!safe("^" + "[a-z]+".repeat(16) + "$"), "chained class+ (measured 469ms at 27 chars)");
 assert.ok(!safe("a+a+a+a+"), "four open-ended repeats is already over the limit");
-assert.ok(safe("a+a+a+"), "three is allowed");
+// THREE interacting repeats is over the limit too, since the budget tightened from
+// 64^3 to 64^2. The number came off the clock, not off a preference: `^\w*\w*\w*$`
+// measures 51 ms against a 255-character basename, and that cost is paid once per
+// attachment — about 17 minutes of frozen UI across a 20,000-attachment vault.
+// See the MAX_SEARCH_SPACE comment for the full measurement table.
+assert.ok(!safe("a+a+a+"), "three interacting repeats is over the limit");
+assert.ok(!safe("^\\w*\\w*\\w*$"), "the 51ms-per-attachment case");
+assert.ok(safe("a+a+"), "two interacting repeats stays usable (measured 0.3ms)");
 assert.ok(!safe("\\d*\\d*\\d*\\d*"));
+
+// --- ...but a chain whose repeats CANNOT interact is linear, and allowed -------
+// Separated by a literal the preceding atom cannot consume, there is nothing to
+// backtrack across, however long the chain. These are the shapes real naming
+// schemes take, and every one of them was refused before the barrier reset.
+assert.ok(safe("^IMG_\\d+_\\d+_\\d+_\\d+$"), "camera naming scheme");
+assert.ok(safe("^Screenshot \\d+-\\d+-\\d+ at \\d+$"), "macOS screenshot scheme");
+assert.ok(safe("^\\d+\\.\\d+\\.\\d+\\.\\d+$"), "dotted version, escaped dots");
+assert.ok(safe("^[a-z]+-[0-9]+-[a-z]+-[0-9]+$"), "class chain around hyphens");
+assert.ok(safe("^\\w+-\\w+-\\w+-\\w+$"), "word chain around hyphens (measured 0.04ms)");
+// An UNESCAPED dot matches digits, so it is not a barrier and the product stands.
+assert.ok(!safe("^\\d+.\\d+.\\d+.\\d+$"), "unescaped dot is not a separator");
+// A hyphen INSIDE the class means the class can match the separator.
+assert.ok(!safe("^[a-z-]+-[a-z-]+-[a-z-]+-[a-z-]+$"), "class that matches its own separator");
+// A class containing an escape is deliberately not modelled, so it proves nothing.
+assert.ok(!safe("^[\\w-]+-[\\w-]+-[\\w-]+-[\\w-]+$"), "unmodelled class proves nothing");
 
 // --- Catastrophic shapes are refused ----------------------------------------
 assert.ok(!safe("^(a+)+$"), "classic nested quantifier");
@@ -177,9 +200,18 @@ assert.ok(safe("^(ab){2,8}$"));
 // --- The search-space budget is calibrated, not guessed ---------------------
 // Measured worst case against a 255-char basename (the matchesJunkName cap):
 //   32,768 -> 9ms   147,456 -> 43ms   262,144 -> 49ms   786,432 -> 156ms
-assert.ok(safe("^\w+\w+\w+$"), "three open-ended repeats stay usable (49ms worst case)");
+//
+// The budget is 64^2, not 64^3. 49 ms reads as cheap for ONE call, and this runs
+// once per attachment — 49 ms is 16 minutes across a 20,000-attachment vault, so
+// the old ceiling was calibrated against the wrong unit. Two interacting repeats
+// (0.3 ms) is the line.
+assert.ok(safe("^\w+\w+$"), "two open-ended repeats stay usable (0.3ms)");
+assert.ok(!safe("^\w+\w+\w+$"), "three interacting repeats is 49ms PER ATTACHMENT");
 assert.ok(!safe("^\w+\w+\w+\w{1,3}$"), "four crosses 150ms per attachment");
 assert.ok(!safe("^\w+\w{1,25}\w{1,25}\w{1,25}$"));
+// The same three repeats, separated so they cannot consume each other's input,
+// cost 0.04 ms and are allowed. Chain length is not what makes a pattern slow.
+assert.ok(safe("^\w+-\w+-\w+$"), "separated repeats are linear");
 
 console.log("regexSafety optional-in-group + budget tests passed");
 

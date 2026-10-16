@@ -35,6 +35,10 @@ const context = await esbuild.context({
   target: "es2018",
   logLevel: "info",
   sourcemap: prod ? false : "inline",
+  // The release build was shipping unminified: 283 KB, of which tweetnacl alone
+  // was 74 KB. Minifying halves it to ~150 KB, which is parse time every user
+  // pays at startup and matters most on mobile, where this plugin also runs.
+  minify: prod,
   treeShaking: true,
   outfile: "main.js",
   platform: "browser",

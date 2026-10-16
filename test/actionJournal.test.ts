@@ -43,10 +43,22 @@ assert.strictEqual(restorability(batch({ trashDestination: "local" })).restorabl
   assert.ok(v.reason && v.reason.length > 0);
 }
 
-// An unrecognised destination must fail CLOSED — never offer a restore we can't
-// prove will work.
-assert.strictEqual(restorability(batch({ trashDestination: "unknown" })).restorable, false);
-assert.strictEqual(restorability(batch({ trashDestination: undefined })).restorable, false);
+// An unrecognised destination is a gap in OUR knowledge, not evidence about the
+// files — so the restore is offered WITH a caveat rather than refused.
+//
+// This used to fail closed, on the principle of never offering a restore we can't
+// prove will work. The principle is right; applying it here was not. `trashOption`
+// is not a public API, so any rename or absence lands on "unknown", and that made
+// every batch permanently unrestorable while the files sat in `.trash` — and hid
+// the "Done with this" escape hatch, which is gated on the same verdict. Looking
+// cannot do harm: `selectTrashCandidate` identifies a file or refuses, so the
+// worst case is the honest "it is no longer in the vault's trash".
+for (const destination of ["unknown", undefined] as const) {
+  const v = restorability(batch({ trashDestination: destination }));
+  assert.strictEqual(v.restorable, true, "an unknown destination is still worth searching");
+  assert.ok(v.caveat && v.caveat.length > 0, "and the uncertainty must be stated");
+  assert.ok(/system trash/i.test(v.caveat), "including where else to look");
+}
 
 // Moves and renames are always reversible: the file still exists, and reversing
 // through Obsidian re-updates the links it updated on the way out.
@@ -130,14 +142,18 @@ assert.deepStrictEqual(
   normalizeJournal([{ id: "a", at: "2026-08-04T10:00:00Z", op: "move", entries: [{ from: "x" }] }], 10),
   []
 );
-// A trash WITHOUT a recorded destination is kept, but marked unknown so it fails closed.
+// A trash WITHOUT a recorded destination is kept, and marked unknown so the
+// restore is offered with a caveat rather than silently assumed to be local.
 {
   const [only] = normalizeJournal(
     [{ id: "a", at: "2026-08-04T10:00:00Z", op: "trash", entries: [{ from: "x.png", sizeBytes: 5 }] }],
     10
   );
   assert.strictEqual(only.trashDestination, "unknown");
-  assert.strictEqual(restorability(only).restorable, false, "unknown destination is not restorable");
+  // Searchable with a caveat rather than refused outright — see above.
+  const v = restorability(only);
+  assert.strictEqual(v.restorable, true);
+  assert.ok(v.caveat, "an unrecorded destination must be stated, not hidden");
 }
 // A bogus destination string is likewise demoted rather than trusted.
 {

@@ -1,5 +1,6 @@
 import { App, Modal, Notice } from "obsidian";
 import { PRODUCT_ID, PRO_NAME, PRO_PRICE_LABEL, PRO_TAGLINE, PRO_UPSELL, PURCHASE_URL } from "../../product";
+import type { ProFeature } from "../../product";
 
 /** Obsidian's settings opener — not in the public typings. */
 interface SettingApi {
@@ -15,7 +16,7 @@ interface SettingApi {
 export class ProUpsellModal extends Modal {
   constructor(
     app: App,
-    private feature: keyof typeof PRO_UPSELL,
+    private feature: ProFeature,
     /** Optional concrete hook (e.g. "Clear all 143 unused files (2.1 GB) at once."). */
     private context?: string
   ) {

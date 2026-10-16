@@ -8,10 +8,17 @@
 /** Default patterns (regex source strings) for auto-generated attachment names. */
 export const DEFAULT_JUNK_NAME_PATTERNS: string[] = [
   "^Pasted image \\d+",
-  "^Screenshot[ _]",
-  "^Screen Shot ",
+  // Anchored on the DIGIT every platform's screenshot name carries (macOS
+  // `Screenshot 2026-01-01 at ...`, Windows `Screenshot (1)`, Android
+  // `Screenshot_20240101-100000`). `^Screenshot[ _]` had no right-hand anchor at
+  // all, so a deliberately-named `Screenshot workflow diagram.png` was reported
+  // as junk — on a free-tier default, with no pattern edited by the user.
+  "^Screenshot[ _(]*\\d",
+  "^Screen Shot \\d",
   "^image( \\(\\d+\\))?$",
-  "^Untitled",
+  // Likewise `^Untitled` matched `Untitled Symphony No. 5 score`. Obsidian's own
+  // untitled names are exactly `Untitled` or `Untitled 1`.
+  "^Untitled( \\d+)?$",
   "^IMG[-_ ]?\\d+$",
   "^DSC[-_ ]?\\d+$",
   "^photo[-_ ]?\\d+$",
