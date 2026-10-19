@@ -1,7 +1,7 @@
 {
   "id": "attachment-audit",
   "name": "Attachment Audit",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "minAppVersion": "1.5.7",
   "description": "Reclaim space safely: find attachments nothing links to, plus duplicates, oversized files and junk pastes, with proof before you delete anything.",
   "author": "Israel Avila",
