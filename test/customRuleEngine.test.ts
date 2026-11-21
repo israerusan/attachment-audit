@@ -65,4 +65,21 @@ const hits = runCustomRules(
 );
 assert.deepStrictEqual(hits.map((h) => h.ruleId), ["a", "b"]);
 
+// Folder matching is case-insensitive and backslash-tolerant, exactly like the
+// misplaced detector and the exclusion settings. The engine used to carry its own
+// exact-prefix copy, so a rule scoped to `assets` never fired for `Assets/`.
+assert.notStrictEqual(
+  evaluateRule(makeStat({ path: "Assets/old/x.png" }), rule({ condition: { type: "in-folder", folder: "assets/old" } }), NOW),
+  null,
+  "in-folder must ignore case"
+);
+assert.notStrictEqual(
+  evaluateRule(makeStat({ path: "Assets/old/x.png" }), rule({ condition: { type: "in-folder", folder: "assets\\old" } }), NOW),
+  null,
+  "in-folder must fold a typed backslash"
+);
+assert.strictEqual(ruleInScope(makeStat({ path: "Scans/x.png" }), { folders: ["scans"] }), true, "scope must ignore case");
+assert.strictEqual(ruleInScope(makeStat({ path: "Scansmore/x.png" }), { folders: ["scans"] }), false, "still a folder boundary");
+assert.strictEqual(ruleInScope(makeStat({ path: "x.png" }), { folders: [""] }), false, "a blank scope entry matches nothing");
+
 console.log("customRuleEngine tests passed");

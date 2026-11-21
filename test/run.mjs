@@ -56,7 +56,10 @@ for (const file of tsTests) {
         obsidian: path.join(testDir, "obsidian-stub.ts"),
       },
     });
-    await import(pathToFileURL(outfile).href);
+    const mod = await import(pathToFileURL(outfile).href);
+    // A test with async work exports its completion as `done`; await it so a
+    // rejection fails THIS file instead of escaping as an unhandled rejection.
+    await mod.default?.done;
   });
 }
 

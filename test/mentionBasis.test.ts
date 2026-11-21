@@ -103,3 +103,77 @@ assert.strictEqual(
 );
 
 console.log("own-data-file exclusion tests passed");
+
+// ======================================== binary media must not blind the scan
+// An oversized SOURCE trips the fail-safe that marks every candidate as mentioned.
+// That is right for a text file we could not read, but `.m4b` (audiobooks) and
+// friends were missing from the binary denylist, so they were classified as text
+// sources — and one 60 MB audiobook anywhere in the vault silently switched off
+// unused detection for the entire vault.
+import { scanVault } from "../src/core/scan/scanVault";
+import { DEFAULT_SETTINGS } from "../src/core/settings/defaults";
+import type { App } from "obsidian";
+import type { ScanConfig } from "../src/types";
+
+for (const path of ["books/novel.m4b", "clips/a.mxf", "comics/issue.cbz", "img/photo.jxl", "maps/route.kmz"]) {
+  assert.ok(!isMentionSourcePath(path), `${path} is binary, not a reference source`);
+}
+
+/** Awaited by `test/run.mjs`, so a failure inside the async scan fails this file. */
+export const done = (async (): Promise<void> => {
+  const mkFile = (path: string, size: number) => {
+    const name = path.slice(path.lastIndexOf("/") + 1);
+    const dot = name.lastIndexOf(".");
+    return {
+      path,
+      name,
+      basename: name.slice(0, dot),
+      extension: name.slice(dot + 1),
+      stat: { size, mtime: 0, ctime: 0 },
+    };
+  };
+  const files = [
+    mkFile("Notes/Index.md", 20),
+    mkFile("assets/orphan.png", 1000),
+    mkFile("books/novel.m4b", 60 * 1024 * 1024),
+  ];
+  const texts: Record<string, string> = { "Notes/Index.md": "# nothing linked" };
+  const app = {
+    vault: {
+      getFiles: () => files,
+      configDir: ".obsidian",
+      cachedRead: (f: { path: string }) => {
+        if (!(f.path in texts)) throw new Error(`binary file read as text: ${f.path}`);
+        return Promise.resolve(texts[f.path]);
+      },
+      adapter: {
+        exists: () => Promise.resolve(false),
+        list: () => Promise.resolve({ files: [], folders: [] }),
+        read: () => Promise.resolve(""),
+      },
+    },
+    metadataCache: { resolvedLinks: {}, unresolvedLinks: {}, getFileCache: () => null },
+  } as unknown as App;
+  const config: ScanConfig = {
+    enabledIssueTypes: ["unused"],
+    largeSizeThresholdKb: DEFAULT_SETTINGS.largeSizeThresholdKb,
+    attachmentFolder: "",
+    junkNamePatterns: [],
+    duplicateMaxScanKb: 0,
+    attachmentExtensions: [],
+    includedFolders: [],
+    excludedFolders: [],
+    excludedPaths: [],
+    severityWeights: DEFAULT_SETTINGS.severityWeights,
+    customRules: [],
+    sortMode: "path",
+  };
+  const result = await scanVault(app, config, false, 0);
+  const unused = result.issues.filter((i) => i.issueType === "unused").map((i) => i.attachmentPath);
+  assert.deepStrictEqual(
+    unused.sort(),
+    ["assets/orphan.png", "books/novel.m4b"],
+    "an audiobook in the vault must not disable unused detection"
+  );
+  console.log("binary-media blind-scan tests passed");
+})();

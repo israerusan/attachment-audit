@@ -99,7 +99,7 @@ It also reads Obsidian's own config folder, so an image used only by a CSS snipp
 That means a file referenced only in canvas, frontmatter, raw HTML, a LaTeX include, or a theme snippet is far less likely to be misclassified as trash.
 
 It also keeps cleanup sane:
-- nothing is hard-deleted
+- nothing is deleted outright unless your Obsidian "Deleted files" setting says so — trash goes where that setting sends it
 - moves and renames preserve links
 - moves never flatten your subfolders
 - duplicate cleanup only removes copies nothing links to, and never trashes every copy

@@ -326,7 +326,7 @@ export class AttachmentManagerSettingTab extends PluginSettingTab {
       .setName("License key")
       .setDesc(
         this.plugin.licenseError ??
-          "After purchase, paste your license key here to unlock all Pro features. See the Buy Pro section in the repo for current purchase and delivery details."
+          "After purchase, paste your license key here to unlock all Pro features. See the Activate Pro section of the README for purchase and delivery details."
       )
       .addText((t) =>
         t

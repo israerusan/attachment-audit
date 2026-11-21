@@ -1,6 +1,7 @@
 import type { CustomRule, CustomRuleCondition, AttachmentStat } from "../../types";
 import { isOlderThanDays } from "../utils/dates";
 import { checkRegexSafety } from "./regexSafety";
+import { isInsideFolder } from "../scan/folderMatch";
 
 /** A custom rule that fired on an attachment: which rule, its weight, and why. */
 export interface CustomRuleHit {
@@ -9,14 +10,12 @@ export interface CustomRuleHit {
   reason: string;
 }
 
-/** True when `path` is the folder itself or lives anywhere beneath it. */
-function isInsideFolder(path: string, folder: string): boolean {
-  // Strip leading AND trailing slashes, matching misplacedDetector so a value like
-  // "/Assets" behaves identically in a rule scope and the misplaced check.
-  const trimmed = folder.trim().replace(/^\/+|\/+$/g, "");
-  if (!trimmed) return false;
-  return path === trimmed || path.startsWith(`${trimmed}/`);
-}
+// Folder matching goes through `folderMatch`, the same case-insensitive rule the
+// misplaced detector and the exclusion settings use. This file used to carry its
+// own exact-prefix copy whose comment claimed it "behaves identically" to the
+// misplaced check — it did not: once that check became case-insensitive, a rule
+// scoped to `assets` silently never fired for files in `Assets/`, and a rule
+// folder typed with a Windows backslash matched nothing at all.
 
 /**
  * True when an attachment falls within a rule's scope. A rule with folders set

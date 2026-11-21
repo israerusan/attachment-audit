@@ -21,7 +21,7 @@ export const PRO_PRICE_LABEL = "$9 one-time";
 
 /** One-line pitch for the Pro tier, reused across upsell surfaces. */
 export const PRO_TAGLINE =
-  "One-click safe bulk cleanup — trash, dedupe, and move across many files at once, links kept intact and everything recoverable. Plus saved profiles, custom rules, and report export. $9 one-time, no subscription, no account.";
+  "One-click safe bulk cleanup — trash, dedupe, and move across many files at once, links kept intact and every change recorded in the cleanup history. Plus saved profiles, custom rules, and severity tuning. $9 one-time, no subscription, no account.";
 
 /** Contextual upsell copy, keyed by the feature the user reached for. */
 /**
@@ -39,5 +39,5 @@ export type ProFeature = "profiles" | "bulk";
 /** Contextual upsell copy, keyed by the feature the user reached for. */
 export const PRO_UPSELL: Record<ProFeature, string> = {
   profiles: "Saved scan profiles are a Pro feature. " + PRO_TAGLINE,
-  bulk: "Bulk actions (trash, dedupe, move, rename) are a Pro feature. " + PRO_TAGLINE,
+  bulk: "Bulk cleanup (trash, dedupe and move across many files) is a Pro feature. " + PRO_TAGLINE,
 };

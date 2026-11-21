@@ -2,6 +2,8 @@
 // The impure `fileManager.renameFile` call lives in main.ts; the target-path
 // computation is here so it can be unit-tested exhaustively.
 
+import { isInsideFolder } from "../scan/folderMatch";
+
 /** Directory portion of a vault path ("" for a root-level file). */
 export function dirName(path: string): string {
   const slash = path.lastIndexOf("/");
@@ -62,4 +64,34 @@ export function uniquePath(desired: string, exists: (p: string) => boolean): str
     if (!exists(candidate)) return candidate;
   }
   return desired; // pathological; caller re-checks before writing
+}
+
+/** What the move action should do with one file. See {@link planMove}. */
+export type MovePlan =
+  | { action: "move"; target: string }
+  /** Already inside the folder; `nested` when it sits in a subfolder of it. */
+  | { action: "skip"; nested: boolean };
+
+/**
+ * Decide what "move to attachment folder" does with `currentPath`.
+ *
+ * "Already inside" is decided with the same case-insensitive rule the misplaced
+ * detector uses (`isInsideFolder`). The move used to test an exact,
+ * case-sensitive prefix instead, so with the setting typed as `assets` and the
+ * folder actually named `Assets`, a file the detector had accepted as correctly
+ * placed — `Assets/2024/photo.png` — was treated as outside it and targeted at
+ * `assets/photo.png`: flattening the very subfolder structure the confirm dialog
+ * promises to leave alone (or, on a case-insensitive disk, failing every move).
+ *
+ * `folder` should be the folder's REAL path when it exists, so a target lands in
+ * the existing folder rather than in a case-variant twin of it.
+ */
+export function planMove(currentPath: string, folder: string): MovePlan {
+  const clean = folder.trim().replace(/^\/+|\/+$/g, "");
+  if (!clean) return { action: "skip", nested: false };
+  if (isInsideFolder(currentPath, clean)) {
+    const depth = clean.split("/").length;
+    return { action: "skip", nested: currentPath.split("/").length > depth + 1 };
+  }
+  return { action: "move", target: joinPath(clean, baseName(currentPath)) };
 }

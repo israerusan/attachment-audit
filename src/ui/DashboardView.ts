@@ -24,7 +24,7 @@ type Filter = IssueType | "all";
 const ONBOARDING_POINTS: [icon: string, text: string][] = [
   ["shield-check", "Cross-checks canvas, frontmatter, HTML and CSS before calling anything unused."],
   ["recycle", "Shows exactly how much space you can reclaim before you touch a file."],
-  ["undo-2", "Nothing is hard-deleted, and moves and renames keep your links intact."],
+  ["undo-2", "Every change is recorded in the cleanup history, and moves and renames keep your links intact."],
 ];
 
 export class AttachmentManagerView extends ItemView {
@@ -751,7 +751,7 @@ export class AttachmentManagerView extends ItemView {
       card.createDiv({
         text:
           `${unusedCount} unused file${unusedCount === 1 ? "" : "s"} to clear. Trashing them one at a time is slow — ` +
-          `Pro clears them all (plus dedupe, move, and rename) in a single action. ${PRO_PRICE_LABEL}, no subscription.`,
+          `Pro clears them all (plus dedupe and move) in a single action. ${PRO_PRICE_LABEL}, no subscription.`,
       });
     } else {
       card.createEl("strong", { text: `Attachment Audit Pro — ${PRO_PRICE_LABEL}` });

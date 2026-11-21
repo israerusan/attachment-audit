@@ -147,7 +147,12 @@ export class ReviewQueueModal extends Modal {
     }
 
     this.actionButton(actions, "eye-off", "Ignore (i)", () => void this.ignoreCurrent());
-    this.actionButton(actions, "ban", "Exclude (e)", () => void this.excludeCurrent());
+    // Exclusion works on FILE paths; a "missing" issue's path is link text with no
+    // file behind it (see the same guard in ResultsList), so excluding one hid the
+    // row now and brought the broken link straight back on the next scan.
+    if (issue.exists !== false) {
+      this.actionButton(actions, "ban", "Exclude (e)", () => void this.excludeCurrent());
+    }
 
     contentEl.createDiv({
       cls: "attachment-audit-review-legend",
@@ -200,7 +205,7 @@ export class ReviewQueueModal extends Modal {
 
   private async excludeCurrent(): Promise<void> {
     const issue = this.current();
-    if (!issue) return;
+    if (!issue || issue.exists === false) return;
     const path = issue.attachmentPath;
     await this.plugin.excludeAttachment(path);
     this.queue = this.queue.filter((i) => i.attachmentPath !== path);

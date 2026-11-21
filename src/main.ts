@@ -59,13 +59,13 @@ import {
   type TrashCandidate,
 } from "./core/journal/trashCandidates";
 import { formatBytes } from "./core/utils/sizes";
-import { moveTargetPath, uniquePath, dirName, splitExtension, joinPath } from "./core/paths/pathRewrite";
+import { planMove, uniquePath, dirName, splitExtension, joinPath } from "./core/paths/pathRewrite";
 import { sanitizeBaseName } from "./core/naming/sanitizeName";
 import { migrateRawSettings, normalizeSettings, SCHEMA_VERSION } from "./core/settings/normalize";
 import { LicenseManager } from "./core/license/LicenseManager";
 import { requirePro } from "./ui/pro/ProGate";
 import { ProUpsellModal } from "./ui/pro/ProUpsellModal";
-import { PRODUCT_NAME, REPORT_FOLDER } from "./product";
+import { PRODUCT_NAME, PRO_PRICE_LABEL, REPORT_FOLDER } from "./product";
 
 /** Obsidian's internal command runner — not in the public typings. */
 interface CommandsApi {
@@ -1090,11 +1090,17 @@ export default class AttachmentManagerPlugin extends Plugin {
       new Notice(`${PRODUCT_NAME}: set an attachment folder in settings first.`);
       return [];
     }
-    const normFolder = normalizePath(folder);
-    // `getFolderByPath`, not `getAbstractFileByPath`: the latter also answers for a
-    // FILE at that path, so a vault containing a file literally named `assets`
-    // would skip the create and then fail every move against it.
-    if (!this.app.vault.getFolderByPath(normFolder)) {
+    let normFolder = normalizePath(folder);
+    // Resolve the folder CASE-INSENSITIVELY, as the misplaced detector matches it.
+    // With the setting typed `assets` and the folder named `Assets`, an exact
+    // lookup missed it and tried to create a case-variant twin — which fails on
+    // Windows/macOS (so nothing moved) and silently splits the folder in two on
+    // Linux. Targets are then built from the folder's real path.
+    // `folderCI` only ever returns a FOLDER, so a vault containing a file literally
+    // named `assets` still takes the create path below.
+    const existingFolder = this.folderCI(normFolder);
+    if (existingFolder) normFolder = existingFolder.path;
+    else {
       try {
         await this.app.vault.createFolder(normFolder);
       } catch (err) {
@@ -1116,22 +1122,22 @@ export default class AttachmentManagerPlugin extends Plugin {
     let interrupted = false;
     let skipped = 0;
     let failed = 0;
-    const folderPrefix = normFolder + "/";
     for (const path of unique(issues.map((i) => i.attachmentPath))) {
       if (this.unloaded) { interrupted = true; break; }
       const file = this.app.vault.getFileByPath(path);
       if (!file) { skipped++; continue; }
       // A file already SOMEWHERE under the attachment folder is left alone.
-      // `moveTargetPath` always targets `<folder>/<basename>`, so moving
+      // Moving always targets `<folder>/<basename>`, so moving
       // `assets/2024/photo.png` would flatten it to `assets/photo.png` and destroy
       // the user's subfolder organisation — for a file the misplaced detector
-      // never even flagged (it accepts any descendant).
-      if (path.startsWith(folderPrefix)) {
-        if (path.slice(folderPrefix.length).includes("/")) inSubfolder.push(path);
+      // never even flagged (it accepts any descendant, case-insensitively).
+      const plan = planMove(path, normFolder);
+      if (plan.action === "skip") {
+        if (plan.nested) inSubfolder.push(path);
         skipped++;
         continue;
       }
-      const desired = moveTargetPath(path, normFolder);
+      const desired = plan.target;
       if (desired === path) { skipped++; continue; } // already there
       const target = uniquePath(desired, (p) => this.pathExistsCI(p, path));
       if (this.pathExistsCI(target, path)) { skipped++; continue; }
@@ -1867,7 +1873,7 @@ export default class AttachmentManagerPlugin extends Plugin {
           new ProUpsellModal(
             this.app,
             "bulk",
-            "Pro clears every unused file — plus dedupe, move, and rename — in one click. $9 one-time, no subscription."
+            `Pro clears every unused file — plus dedupe and move — in one click. ${PRO_PRICE_LABEL}, no subscription.`
           ).open()
         );
       });

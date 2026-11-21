@@ -137,6 +137,19 @@ const BINARY_ATTACHMENT_EXTS = new Set([
   // design and 3D binaries
   "sketch", "fig", "xd", "afdesign", "afphoto", "blend", "fbx", "glb", "stl",
   "3ds", "max", "c4d", "ai", "indd", "swf",
+  // Binary media and containers the list above missed. Each one was read as a
+  // TEXT source, and that is not just a wasted read: an audiobook (`.m4b`), a
+  // camera clip (`.mxf`) or a comic archive is routinely over MAX_SOURCE_BYTES,
+  // and an oversized source trips the fail-safe that marks EVERY candidate as
+  // mentioned — so one audiobook anywhere in the vault silently turned off
+  // unused detection for the whole vault, on every scan. Only formats with no
+  // plausible text form belong here (`.ts` is TypeScript as often as video, so
+  // it stays readable).
+  "m4b", "m4p", "m4r", "caf", "dsf", "dff", "wv", "mka", "ra", "rm", "rmvb",
+  "mxf", "divx", "f4v", "asf", "qt", "braw", "r3d",
+  "jxl", "jp2", "j2k", "jpx", "exr", "dds", "tga", "qoi", "cur", "pcx", "wmf", "emf",
+  "cbz", "cbr", "cb7", "lz", "lzma", "img", "vhd", "vhdx", "qcow2",
+  "ipa", "xpi", "crx", "msix", "appx", "xmind", "kmz", "svgz", "emz",
 ]);
 
 /**
