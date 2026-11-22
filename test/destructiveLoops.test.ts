@@ -315,6 +315,48 @@ duplicate`,
     assert.ok(h.files.has("m.png"));
   }
 
+  // --- Single rename: same guards as bulk move -------------------------------
+  {
+    const renamed: string[] = [];
+    const wire = (h: ReturnType<typeof harness>) => {
+      Object.assign(h.plugin.app as object, {
+        fileManager: {
+          renameFile: (f: FakeFile, to: string) => {
+            renamed.push(to);
+            h.files.delete(f.path);
+            h.files.set(to, { ...f, path: to });
+            return Promise.resolve();
+          },
+        },
+      });
+      h.plugin.pathExistsCI = (p: string) => h.files.has(p);
+      return (h.plugin.renameAttachment as (p: string, n: string) => Promise<string | null>).bind(
+        h.plugin
+      );
+    };
+
+    const ok = harness(["img/a.png"]);
+    assert.strictEqual(await wire(ok)("img/a.png", "b"), "img/b.png");
+    assert.strictEqual(ok.plugin.settings.journal.length, 1, "the rename is recorded");
+
+    // History cannot be written: no rename.
+    const ro = harness(["img/a.png"]);
+    ro.setSaveFails(true);
+    renamed.length = 0;
+    assert.strictEqual(await wire(ro)("img/a.png", "b"), null);
+    assert.deepStrictEqual(renamed, [], "nothing is renamed without an undo record");
+
+    // Edited while its hash was read: no rename.
+    const racing = harness(["img/a.png"]);
+    racing.plugin.maybeHashFile = () => {
+      racing.files.get("img/a.png")!.stat.mtime = 4242;
+      return Promise.resolve({ head: "h", full: "f" });
+    };
+    renamed.length = 0;
+    assert.strictEqual(await wire(racing)("img/a.png", "b"), null);
+    assert.deepStrictEqual(renamed, []);
+  }
+
   console.log("destructiveLoops tests passed");
 }
 

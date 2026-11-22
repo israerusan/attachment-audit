@@ -1431,6 +1431,18 @@ export default class AttachmentManagerPlugin extends Plugin {
     // Taken BEFORE the rename, so `reverseMove` can verify identity by content
     // rather than by size alone.
     const hashes = await this.maybeHashFile(file);
+    // Same two guards as bulk move. Changed while it was read: the recorded hash
+    // would not describe what is renamed, so undo could never identify it.
+    if (
+      this.app.vault.getFileByPath(path) !== file ||
+      file.stat.size !== sizeBytes ||
+      file.stat.mtime !== mtime
+    ) {
+      new Notice(`${PRODUCT_NAME}: the file changed while it was being renamed — nothing was changed. Try again.`);
+      return null;
+    }
+    // And no rename without a history record it can be undone from.
+    if (!(await this.journalWritable())) return null;
     try {
       await this.app.fileManager.renameFile(file, target);
     } catch (err) {
