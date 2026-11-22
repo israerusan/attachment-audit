@@ -245,10 +245,13 @@ export function selectTrashCandidate(
   const fullsKnown = target.headHash !== undefined && pool.every((c) => c.fullHash !== undefined);
   if (fullsKnown && pool.every((c) => c.fullHash === pool[0].fullHash)) return { found: pool[0] };
   // ...and if they provably DIFFER, the head hash could not separate them (a
-  // shared preamble: container formats, generated media), so only genuine
-  // per-entry evidence may decide. Handing out the first one restored such files
-  // SWAPPED and reported success.
-  const contentDiffers = fullsKnown;
+  // shared preamble: container formats, generated media). Handing out the first
+  // one restored such files SWAPPED and reported success.
+  // With provably different contents and no whole-file hash recorded for the
+  // entry (pre-1.3.3 history), NOTHING circumstantial may decide: not the name,
+  // and not a matching mtime either (a decoy can carry the recorded timestamp
+  // while the genuine file's changed). Refuse; the file stays in `.trash`.
+  if (fullsKnown) return { found: null, reason: "ambiguous" };
 
   // Prefer the exact filename over a collision-suffixed one — but only where the
   // contents could not be told apart. A filename is circumstantial: if `.trash`
@@ -256,7 +259,7 @@ export function selectTrashCandidate(
   // the exact name hands back the stranger. Skipped, too, when this batch trashed
   // the same basename more than once: the unsuffixed name then belongs to
   // whichever entry was trashed first (see `requireContentMatch` above).
-  if (!options?.requireContentMatch && !contentDiffers) {
+  if (!options?.requireContentMatch) {
     const exactName = pool.filter((c) => normalizeName(baseName(c.path)) === wantedName);
     if (exactName.length === 1) return { found: exactName[0] };
   }

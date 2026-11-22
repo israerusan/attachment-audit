@@ -166,7 +166,9 @@ const c = (path: string, size: number, mtime = 1000): TrashCandidate => ({ path,
   );
   assert.strictEqual(out.found, null, "exact name does not override differing content");
 }
-// ...but a recorded mtime that singles one out still does — it is per-entry evidence.
+// ...and neither may a matching recorded mtime: a decoy can carry the recorded
+// timestamp while the genuine file's changed. Provably different content with no
+// whole-file hash on the entry means refuse.
 {
   const out = selectTrashCandidate(
     [
@@ -175,7 +177,7 @@ const c = (path: string, size: number, mtime = 1000): TrashCandidate => ({ path,
     ],
     { from: "b/logo.png", sizeBytes: 100, mtime: 2, headHash: "same" }
   );
-  assert.strictEqual(out.found?.path, ".trash/logo 1.png");
+  assert.strictEqual(out.found, null, "mtime does not override differing content");
 }
 // No content hashes at all (an old journal entry): exact name keeps its old role.
 {

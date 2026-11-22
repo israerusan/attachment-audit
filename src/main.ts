@@ -1003,11 +1003,16 @@ export default class AttachmentManagerPlugin extends Plugin {
       return [];
     }
 
-    // Re-proved per file immediately before its trash. The check above ran before
-    // the gate's awaited mention scan, so a survivor edited during that scan (or
-    // during the batch) was still being counted. Scoped to the file's own
+    // Re-proved per file immediately before its trash, BY CONTENT. The proof
+    // above ran before the gate's awaited mention scan, and size/mtime cannot
+    // stand in for it afterwards: a sync client can swap in same-size bytes and
+    // keep the timestamp. So for each file the loop re-hashes it AND one
+    // surviving copy against the cluster's hash, and gets back a synchronous
+    // check (stat of both unchanged since that read) that it evaluates with
+    // nothing awaited between it and the trash. Scoped to the file's own
     // cluster, so a large batch does not pay for every other cluster each time.
     const clusterOf = new Map<string, string>();
+    const membersOf = new Map<string, string[]>();
     const allByCluster = new Map<string, AttachmentIssue[]>();
     for (const i of allIssues) {
       if (i.issueType !== "duplicate" || !i.clusterId) continue;
@@ -1015,6 +1020,9 @@ export default class AttachmentManagerPlugin extends Plugin {
       const b = allByCluster.get(i.clusterId) ?? [];
       b.push(i);
       allByCluster.set(i.clusterId, b);
+      const m = membersOf.get(i.clusterId) ?? [];
+      if (!m.includes(i.attachmentPath)) m.push(i.attachmentPath);
+      membersOf.set(i.clusterId, m);
     }
     const selectedByCluster = new Map<string, AttachmentIssue[]>();
     for (const i of selected) {
@@ -1023,20 +1031,47 @@ export default class AttachmentManagerPlugin extends Plugin {
       b.push(i);
       selectedByCluster.set(i.clusterId, b);
     }
-    const stillRedundant = (p: string): boolean => {
+    const order = new Map(toTrash.map((p, i) => [p, i]));
+    const statOf = (p: string): { size: number; mtime: number } | null => {
+      const f = this.app.vault.getFileByPath(p);
+      return f ? { size: f.stat.size, mtime: f.stat.mtime } : null;
+    };
+    const sameStat = (p: string, at: { size: number; mtime: number }): boolean => {
+      const now = statOf(p);
+      return now !== null && now.size === at.size && now.mtime === at.mtime;
+    };
+    const proveRedundant = async (p: string): Promise<(() => boolean) | null> => {
       const cid = clusterOf.get(p);
-      if (cid === undefined) return false;
-      return selectDuplicateCopiesToTrash(
+      if (cid === undefined) return null;
+      // Keep-one and selection scope, against the snapshot proofs.
+      const stillSelected = selectDuplicateCopiesToTrash(
         selectedByCluster.get(cid) ?? [],
         allByCluster.get(cid) ?? [],
         unused,
         inbound,
         unchangedSinceScan
       ).includes(p);
+      if (!stillSelected) return null;
+      const self = statOf(p);
+      if (!self || (await this.hashFile(adapter, p))?.full !== cid) return null;
+      // A survivor: another member still on disk that this batch will NOT reach
+      // later (a file later in `toTrash` may yet be trashed, so it cannot be the
+      // copy that is kept).
+      const myIndex = order.get(p) ?? -1;
+      for (const m of membersOf.get(cid) ?? []) {
+        if (m === p) continue;
+        const later = order.get(m);
+        if (later !== undefined && later > myIndex) continue;
+        const at = statOf(m);
+        if (!at || !unchangedSinceScan(m)) continue;
+        if ((await this.hashFile(adapter, m))?.full !== cid) continue;
+        return () => sameStat(p, self) && sameStat(m, at);
+      }
+      return null;
     };
 
     const gate = await this.openTrashGate(toTrash, selected, inbound, unused);
-    return await this.trashGatedPaths(toTrash, gate, selected, false, stillRedundant);
+    return await this.trashGatedPaths(toTrash, gate, selected, false, proveRedundant);
   }
 
   /**
@@ -1095,7 +1130,7 @@ export default class AttachmentManagerPlugin extends Plugin {
     gate: TrashGate,
     issues: AttachmentIssue[],
     single: boolean,
-    verify?: (path: string) => boolean
+    prove?: (path: string) => Promise<(() => boolean) | null>
   ): Promise<string[]> {
     let live = gate;
     const bytesByPath = new Map(issues.map((i) => [i.attachmentPath, i.sizeBytes]));
@@ -1103,6 +1138,7 @@ export default class AttachmentManagerPlugin extends Plugin {
     // mid-batch must not leave earlier files recorded with the wrong destination.
     const destination = this.trashDestination();
     const batch = this.openJournalBatch("trash", destination);
+    if (!(await this.journalWritable())) return [];
     const trashed: string[] = [];
     let skipped = 0;
     let failed = 0;
@@ -1148,6 +1184,18 @@ export default class AttachmentManagerPlugin extends Plugin {
         const sizeBytes = preHashFile.stat.size;
         const mtime = preHashFile.stat.mtime;
         const hashes = await this.maybeHashFile(preHashFile);
+        // The action's own proof (duplicate cleanup re-hashes the file and a
+        // survivor). Awaited HERE, before the gate is re-established, so every
+        // await is behind us when the final checks run; it returns the
+        // synchronous part of itself for the last word.
+        let finalCheck: (() => boolean) | null = null;
+        if (prove) {
+          finalCheck = await prove(path);
+          if (!finalCheck) {
+            skipped++;
+            continue;
+          }
+        }
         // Re-establish the verdict if ANYTHING changed since it was taken —
         // looped, because re-establishing it awaits too. Doing this only on a
         // change is what keeps it affordable: the mention re-check reads just
@@ -1189,8 +1237,8 @@ export default class AttachmentManagerPlugin extends Plugin {
           continue;
         }
         // Action-specific last word, evaluated synchronously so nothing can land
-        // between it and the trash (duplicate cleanup re-proves its survivor here).
-        if (verify && !verify(path)) {
+        // between it and the trash.
+        if (finalCheck && !finalCheck()) {
           skipped++;
           continue;
         }
@@ -1273,6 +1321,7 @@ export default class AttachmentManagerPlugin extends Plugin {
     // Both endpoints, so the move can be reversed. `moved` alone only carries the
     // destination, which is not enough to put anything back.
     const batch = this.openJournalBatch("move");
+    if (!(await this.journalWritable())) return [];
     const inSubfolder: string[] = [];
     let interrupted = false;
     let skipped = 0;
@@ -1306,6 +1355,13 @@ export default class AttachmentManagerPlugin extends Plugin {
         // vault to point at it. The machinery to prevent that already existed and
         // was simply not wired here.
         const hashes = await this.maybeHashFile(file);
+        // Changed while it was read: the hash would not describe what is moved,
+        // and undo could never identify it again.
+        const after = this.app.vault.getFileByPath(path);
+        if (after !== file || file.stat.size !== sizeBytes || file.stat.mtime !== mtime) {
+          skipped++;
+          continue;
+        }
         await this.app.fileManager.renameFile(file, target);
         moved.push(target);
         await this.recordInBatch(batch, {
@@ -1468,6 +1524,10 @@ export default class AttachmentManagerPlugin extends Plugin {
       return;
     }
     open.batch.entries.push(entry);
+    // The FIRST entry is persisted immediately, then every
+    // JOURNAL_FLUSH_EVERY: a write that starts failing mid-action is caught after
+    // one file rather than after a whole flush interval.
+    const first = !open.attached;
     if (!open.attached) {
       this.settings.journal = appendBatch(
         this.settings.journal,
@@ -1477,12 +1537,29 @@ export default class AttachmentManagerPlugin extends Plugin {
       open.attached = true;
     }
     open.pending++;
-    if (open.pending >= JOURNAL_FLUSH_EVERY) {
+    if (first || open.pending >= JOURNAL_FLUSH_EVERY) {
       // `pending` is only cleared on SUCCESS, so a failed flush is retried by
       // `closeJournalBatch` rather than forgotten.
       if (await this.saveJournal()) open.pending = 0;
       else open.saveFailed = true;
     }
+  }
+
+  /**
+   * Prove the cleanup history can be written BEFORE anything is mutated. Without
+   * it a batch smaller than {@link JOURNAL_FLUSH_EVERY} finished every mutation
+   * before its first write was even attempted, so a read-only or full disk left
+   * the whole action without an undo record. Costs one `data.json` write per
+   * action, and nothing when history is off.
+   */
+  private async journalWritable(): Promise<boolean> {
+    if (this.settings.journalLimit <= 0) return true;
+    if (await this.saveJournal()) return true;
+    new Notice(
+      `${PRODUCT_NAME}: the cleanup history cannot be saved right now, so nothing was changed. See the console for the cause.`,
+      10000
+    );
+    return false;
   }
 
   /** Persist whatever the batch collected. Safe to call on an empty batch. */
@@ -1855,6 +1932,15 @@ export default class AttachmentManagerPlugin extends Plugin {
     } catch {
       return { path: null, reason: "the file in the trash could not be read" };
     }
+    // The bytes WRITTEN must be the bytes that were identified. The candidate
+    // was hashed by an earlier read; something replacing it in `.trash` since
+    // would otherwise be restored, and its real twin consumed, as if verified.
+    if (outcome.found.fullHash !== undefined) {
+      const now = toHex(await crypto.subtle.digest("SHA-256", data));
+      if (now !== outcome.found.fullHash) {
+        return { path: null, reason: "the file in the trash changed while it was being restored" };
+      }
+    }
     // Restore the original modification time so the file comes back as it was,
     // rather than looking freshly created.
     await this.app.vault.createBinary(target, data, entry.mtime ? { mtime: entry.mtime } : undefined);
@@ -1863,7 +1949,12 @@ export default class AttachmentManagerPlugin extends Plugin {
     // this fails the file simply exists in both places, whereas removing first
     // and failing to create would lose it.
     try {
-      await adapter.remove(outcome.found.path);
+      // Only the file we identified: if it has changed in `.trash` since, it is
+      // not ours to delete, and leaving both copies is the safe failure.
+      const before = await adapter.stat(outcome.found.path);
+      if (before && before.size === outcome.found.size && before.mtime === outcome.found.mtime) {
+        await adapter.remove(outcome.found.path);
+      }
     } catch (err) {
       console.error(`Attachment Audit: restored ${target} but could not clear its trash copy`, err);
     }

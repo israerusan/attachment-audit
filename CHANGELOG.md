@@ -14,14 +14,16 @@ A safety-fix release from an outside-model review (Copilot, Hermes, Codex).
   device) was missed for that file. The check now runs after the read, right
   before the trash, and a file the vault will not hold still long enough to verify
   is skipped.
-- **A failed write of the cleanup history now stops the cleanup and tells you.**
-  A full disk, read-only vault or a sync client holding `data.json` used to fail
-  silently: the cleanup went on, looked restorable, and lost its undo record at
-  the next restart.
+- **A cleanup whose history cannot be saved no longer runs.** A full disk,
+  read-only vault or a sync client holding `data.json` used to fail silently: the
+  cleanup went on, looked restorable, and lost its undo record at the next
+  restart. The history write is now checked before anything is touched, the first
+  entry is saved immediately, and a write that starts failing mid-cleanup stops
+  it and tells you.
 - **Duplicate cleanup no longer counts an edited file as "the copy that's kept".**
   Every copy in an affected group is now re-hashed when you run the cleanup and
-  must still match the scanned content, and is checked again right before each
-  file is trashed. A copy changed since the scan can neither be the survivor nor
+  must still match the scanned content, and right before each file is trashed it
+  and a surviving copy are re-hashed again. A copy changed since the scan can neither be the survivor nor
   be trashed as redundant. Very large duplicate groups no longer slow the cleanup
   down quadratically.
 - **Undo can no longer swap two files that merely start the same way.** Two
@@ -29,7 +31,8 @@ A safety-fix release from an outside-model review (Copilot, Hermes, Codex).
   formats) could be restored to each other's paths, and a lone look-alike could be
   restored in place of a file that was gone. Cleanups now record a whole-file hash
   (from the read they already did), and restore and undo-move require it to
-  match, or refuse. History recorded by earlier versions still restores, but when
+  match, or refuse. A restore also checks the bytes it actually writes, and only
+  clears the trash copy it identified. History recorded by earlier versions still restores, but when
   two trashed look-alikes provably differ it now refuses instead of guessing by
   filename — the file stays in `.trash` for you to restore by hand.
 

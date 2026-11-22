@@ -156,17 +156,34 @@ async function run(): Promise<void> {
     assert.ok(h.files.has("a.png"));
   }
 
-  // --- History write fails: stop, and say so ---------------------------------
-  // `saveJournal` used to swallow the failure, so the batch went on trashing
-  // files whose recovery record existed only in memory, and the user was told
-  // nothing.
+  // --- History cannot be written at all: nothing is touched -----------------
+  // A batch smaller than the flush interval used to finish every mutation before
+  // its first write was attempted, so a read-only or full disk left the whole
+  // action without an undo record. The write is now proven before anything moves.
   {
-    const paths = Array.from({ length: 60 }, (_, i) => `f${i}.png`);
+    const paths = ["s1.png", "s2.png", "s3.png"];
     const h = harness(paths);
     h.setSaveFails(true);
     notices.length = 0;
     const out = await loopOf(h.plugin)(paths, freshGate(paths), paths.map(issue), false);
-    assert.strictEqual(out.length, 25, `stops at the first failed flush (trashed ${out.length})`);
+    assert.deepStrictEqual(out, [], "nothing is trashed when history cannot be saved");
+    assert.strictEqual(h.files.size, 3);
+    assert.ok(
+      notices.some((n) => n.includes("nothing was changed")),
+      `the user is told: ${JSON.stringify(notices)}`
+    );
+  }
+
+  // --- History write starts failing mid-action: stop after one file, say so ---
+  {
+    const paths = Array.from({ length: 60 }, (_, i) => `f${i}.png`);
+    const h = harness(paths);
+    let calls = 0;
+    h.plugin.saveData = () =>
+      ++calls === 1 ? Promise.resolve() : Promise.reject(new Error("disk full"));
+    notices.length = 0;
+    const out = await loopOf(h.plugin)(paths, freshGate(paths), paths.map(issue), false);
+    assert.strictEqual(out.length, 1, `stops at the first failed write (trashed ${out.length})`);
     assert.ok(
       notices.some((n) => n.includes("could not be saved")),
       `the user is told: ${JSON.stringify(notices)}`
@@ -181,13 +198,13 @@ async function run(): Promise<void> {
     const h = harness(paths);
     let calls = 0;
     h.plugin.saveData = () =>
-      ++calls === 1 ? Promise.reject(new Error("transient")) : Promise.resolve();
+      ++calls === 2 ? Promise.reject(new Error("transient")) : Promise.resolve();
     notices.length = 0;
     const out = await loopOf(h.plugin)(paths, freshGate(paths), paths.map(issue), false);
-    assert.strictEqual(out.length, 25, "stopped at the failed flush");
+    assert.strictEqual(out.length, 1, "stopped at the failed write");
     assert.ok(!notices.some((n) => n.includes("may not be restorable")), JSON.stringify(notices));
     assert.ok(notices.some((n) => n.includes("Everything done so far is recorded")));
-    assert.strictEqual(h.plugin.settings.journal[0].entries.length, 25);
+    assert.strictEqual(h.plugin.settings.journal[0].entries.length, 1);
   }
 
   // --- History write succeeds: no false alarm --------------------------------
@@ -262,6 +279,19 @@ duplicate`,
     };
     assert.deepStrictEqual(await trashDupes(racing), [], "a survivor edited mid-gate is caught");
     assert.ok(racing.files.has("a.png"));
+
+    // The survivor's bytes are swapped — same size, same mtime — AFTER the
+    // up-front proof (here: during the gate's mention scan). Only re-hashing
+    // right before the trash can see it.
+    const swappedLate = setup();
+    const realGate2 = swappedLate.plugin.openTrashGate as (ps: string[]) => Promise<Gate>;
+    swappedLate.plugin.openTrashGate = async (ps: string[]) => {
+      const g = await realGate2(ps);
+      swappedLate.contents.set("b.png", "PIXELZ");
+      return g;
+    };
+    assert.deepStrictEqual(await trashDupes(swappedLate), [], "a late same-stat swap is caught by content");
+    assert.ok(swappedLate.files.has("a.png"));
 
     // Both copies selected and unused: exactly one goes, one stays.
     const both = setup();
