@@ -50,6 +50,15 @@ export interface JournalEntry {
    */
   headHash?: string;
   /**
+   * SHA-256 of the WHOLE file at the moment it was trashed or moved, taken from
+   * the same read as {@link headHash} (there is no ranged read, so it costs CPU
+   * only). The head alone could not tell apart two files that share a preamble —
+   * container formats, generated media — so a lone same-size candidate with the
+   * right first 64 KB was accepted as ours. Absent on entries recorded before
+   * 1.3.3, which keep the head-only behaviour.
+   */
+  fullHash?: string;
+  /**
    * Where this entry was actually restored to, once it has been. Per-entry state,
    * so a partially-restored batch can be re-run to completion without
    * re-searching — and without pulling a second file out of the trash for an
@@ -287,6 +296,7 @@ export function normalizeJournal(value: unknown, limit: number): JournalBatch[] 
         mtime:
           typeof e.mtime === "number" && Number.isFinite(e.mtime) ? e.mtime : undefined,
         headHash: typeof e.headHash === "string" && e.headHash ? e.headHash : undefined,
+        fullHash: typeof e.fullHash === "string" && e.fullHash ? e.fullHash : undefined,
         restoredTo: typeof e.restoredTo === "string" && e.restoredTo ? e.restoredTo : undefined,
       });
     }

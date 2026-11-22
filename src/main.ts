@@ -89,6 +89,13 @@ const JOURNAL_FLUSH_EVERY = 25;
  */
 const RESTORE_COPY_MAX_BYTES = 64 * 1024 * 1024;
 
+/**
+ * How many times the trash loop re-establishes the safety gate for ONE file when
+ * the vault keeps changing underneath it. Past this the file is skipped rather
+ * than trashed on a verdict that could not be brought up to date.
+ */
+const MAX_REGATES = 5;
+
 /** Where a restored file actually landed, or why it could not be put back. */
 /**
  * The live two-signal verdict for one destructive action: which paths passed the
@@ -119,6 +126,23 @@ interface OpenBatch {
   unrecorded: number;
   /** Set once the per-batch entry ceiling is hit; no further entries are kept. */
   full: boolean;
+  /**
+   * Set when persisting the history FAILED (full disk, read-only vault, a sync
+   * client holding data.json). The entries exist only in memory from then on, so
+   * a restart loses them — the loop stops, rather than keep mutating files whose
+   * recovery record cannot be written, and the user is told.
+   */
+  saveFailed: boolean;
+  /** A failed flush was later retried successfully: stopped early, but recorded. */
+  saveRecovered: boolean;
+}
+
+/** Lower-case hex of a digest. */
+function toHex(digest: ArrayBuffer): string {
+  const bytes = new Uint8Array(digest);
+  let hex = "";
+  for (let i = 0; i < bytes.length; i++) hex += bytes[i].toString(16).padStart(2, "0");
+  return hex;
 }
 
 interface RestoreOutcome {
@@ -126,6 +150,12 @@ interface RestoreOutcome {
   path: string | null;
   /** User-facing explanation when `path` is null. */
   reason?: string;
+  /**
+   * True when the bytes are back on disk but Obsidian's file index has not seen
+   * them (the oversized-file move path). Reported, never claimed as a clean
+   * restore: the file is invisible to the vault until Obsidian notices it.
+   */
+  unindexed?: boolean;
 }
 
 export interface ScanRun {
@@ -928,14 +958,42 @@ export default class AttachmentManagerPlugin extends Plugin {
     }
     const inbound = this.inboundMap();
     const unused = this.unusedPathSet();
+    const allIssues = this.lastResult?.issues ?? [];
+    // Cluster membership is a scan-time FACT about content, and existence does
+    // not keep it true: a copy rewritten since the scan (another device, an
+    // external editor) is no longer a duplicate of anything, so it can neither
+    // stand in as the surviving copy nor be trashed as a redundant one. Size and
+    // mtime cannot prove that — a sync client can swap in same-size bytes and
+    // keep the timestamp — so every copy in an affected cluster is RE-HASHED now
+    // and must still match the cluster's hash (`clusterId` is the scan's SHA-256
+    // of the bytes). Its stat is snapshotted with the proof, and the synchronous
+    // check below requires it to be unchanged since, which covers the window
+    // between this proof and the trash.
+    const clusters = new Set<string>();
+    for (const i of selected) {
+      if (i.issueType === "duplicate" && i.clusterId) clusters.add(i.clusterId);
+    }
+    const proven = new Map<string, { size: number; mtime: number }>();
+    const adapter = this.app.vault.adapter;
+    for (const i of allIssues) {
+      if (i.issueType !== "duplicate" || !i.clusterId || !clusters.has(i.clusterId)) continue;
+      if (proven.has(i.attachmentPath)) continue;
+      if (this.unloaded) return [];
+      const file = this.app.vault.getFileByPath(i.attachmentPath);
+      if (!file) continue;
+      const stat = { size: file.stat.size, mtime: file.stat.mtime };
+      const hashes = await this.hashFile(adapter, i.attachmentPath);
+      if (hashes?.full === i.clusterId) proven.set(i.attachmentPath, stat);
+    }
+    const unchangedSinceScan = (p: string): boolean => {
+      const file = this.app.vault.getFileByPath(p);
+      const at = proven.get(p);
+      return (
+        file !== null && at !== undefined && file.stat.size === at.size && file.stat.mtime === at.mtime
+      );
+    };
     const toTrash = unique(
-      selectDuplicateCopiesToTrash(
-        selected,
-        this.lastResult?.issues ?? [],
-        unused,
-        inbound,
-        (p) => this.app.vault.getFileByPath(p) !== null
-      )
+      selectDuplicateCopiesToTrash(selected, allIssues, unused, inbound, unchangedSinceScan)
     );
 
     if (toTrash.length === 0) {
@@ -945,8 +1003,40 @@ export default class AttachmentManagerPlugin extends Plugin {
       return [];
     }
 
+    // Re-proved per file immediately before its trash. The check above ran before
+    // the gate's awaited mention scan, so a survivor edited during that scan (or
+    // during the batch) was still being counted. Scoped to the file's own
+    // cluster, so a large batch does not pay for every other cluster each time.
+    const clusterOf = new Map<string, string>();
+    const allByCluster = new Map<string, AttachmentIssue[]>();
+    for (const i of allIssues) {
+      if (i.issueType !== "duplicate" || !i.clusterId) continue;
+      clusterOf.set(i.attachmentPath, i.clusterId);
+      const b = allByCluster.get(i.clusterId) ?? [];
+      b.push(i);
+      allByCluster.set(i.clusterId, b);
+    }
+    const selectedByCluster = new Map<string, AttachmentIssue[]>();
+    for (const i of selected) {
+      if (i.issueType !== "duplicate" || !i.clusterId) continue;
+      const b = selectedByCluster.get(i.clusterId) ?? [];
+      b.push(i);
+      selectedByCluster.set(i.clusterId, b);
+    }
+    const stillRedundant = (p: string): boolean => {
+      const cid = clusterOf.get(p);
+      if (cid === undefined) return false;
+      return selectDuplicateCopiesToTrash(
+        selectedByCluster.get(cid) ?? [],
+        allByCluster.get(cid) ?? [],
+        unused,
+        inbound,
+        unchangedSinceScan
+      ).includes(p);
+    };
+
     const gate = await this.openTrashGate(toTrash, selected, inbound, unused);
-    return await this.trashGatedPaths(toTrash, gate, selected, false);
+    return await this.trashGatedPaths(toTrash, gate, selected, false, stillRedundant);
   }
 
   /**
@@ -963,6 +1053,10 @@ export default class AttachmentManagerPlugin extends Plugin {
     inbound: Map<string, number> = this.inboundMap(),
     unused: Set<string> = this.unusedPathSet()
   ): Promise<TrashGate> {
+    // Taken BEFORE anything is awaited. It used to be read after the mention
+    // scan, so a source edited DURING that scan was attributed to a verdict that
+    // never saw it, and the loop's epoch check passed on stale data.
+    const epoch = this.mutationEpoch;
     const nameByPath = new Map(issues.map((i) => [i.attachmentPath, i.attachmentName]));
     // Only paths that pass the snapshot gates are worth re-checking — and the
     // trash loop then intersects against THIS set rather than re-testing the
@@ -980,7 +1074,7 @@ export default class AttachmentManagerPlugin extends Plugin {
       this.changedSourcesSince(),
       this.scanStartedMs()
     );
-    return { eligible: new Set(eligible), mentioned, epoch: this.mutationEpoch };
+    return { eligible: new Set(eligible), mentioned, epoch };
   }
 
   /**
@@ -1000,7 +1094,8 @@ export default class AttachmentManagerPlugin extends Plugin {
     paths: string[],
     gate: TrashGate,
     issues: AttachmentIssue[],
-    single: boolean
+    single: boolean,
+    verify?: (path: string) => boolean
   ): Promise<string[]> {
     let live = gate;
     const bytesByPath = new Map(issues.map((i) => [i.attachmentPath, i.sizeBytes]));
@@ -1021,45 +1116,105 @@ export default class AttachmentManagerPlugin extends Plugin {
         interrupted = true;
         break;
       }
-      const file = this.app.vault.getFileByPath(path);
-      if (!file) {
-        skipped++;
-        continue;
-      }
-      // Re-establish the verdict if ANYTHING changed since it was taken. Doing
-      // this only on a change is what keeps it affordable: the mention re-check
-      // reads just the sources that moved, and the inbound map is one pass over
-      // the already-resolved link graph. A batch during which nothing happens
-      // pays nothing at all.
-      if (this.mutationEpoch !== live.epoch) {
-        live = await this.openTrashGate(remaining(paths, path), issues);
-      }
-      // Skip anything newly referenced (by link OR content) or not confirmed unused.
-      if (!live.eligible.has(path) || live.mentioned.has(path)) {
+      if (!this.app.vault.getFileByPath(path)) {
         skipped++;
         continue;
       }
       try {
-        // Size and mtime as they are NOW, not as the scan saw them. These are the
-        // identity gate when finding the file again in `.trash`, and a file edited
-        // between the scan and the trash would otherwise be unidentifiable.
-        const sizeBytes = file.stat.size;
-        const mtime = file.stat.mtime;
-        // Read BEFORE the trash: afterwards the file is somewhere we would have
-        // to guess at, which is the whole problem this hash exists to remove.
-        const headHash = await this.maybeHashHead(file);
+        // Hashed FIRST, before the gate is consulted. `maybeHashFile` awaits a
+        // read, and a source edited during that read used to bump the epoch
+        // after the gate had already passed — the stale verdict was then used
+        // for the trash. Everything awaited now happens before the final check,
+        // so the check and the `trashFile` call are adjacent.
+        // Not worth reading a file the current verdict already rejects. Only
+        // trusted while that verdict is fresh; a stale one is re-established
+        // below, after the read, and that is the check that decides.
+        if (
+          this.mutationEpoch === live.epoch &&
+          (!live.eligible.has(path) || live.mentioned.has(path))
+        ) {
+          skipped++;
+          continue;
+        }
+        const preHashFile = this.app.vault.getFileByPath(path);
+        if (!preHashFile) {
+          skipped++;
+          continue;
+        }
+        // Size and mtime snapshotted BEFORE the read, and recorded with the hash
+        // the read produces. Reading them after the awaits could pair a hash of
+        // the old bytes with the stat of new ones, so the restore would later
+        // reject the genuine trashed file.
+        const sizeBytes = preHashFile.stat.size;
+        const mtime = preHashFile.stat.mtime;
+        const hashes = await this.maybeHashFile(preHashFile);
+        // Re-establish the verdict if ANYTHING changed since it was taken —
+        // looped, because re-establishing it awaits too. Doing this only on a
+        // change is what keeps it affordable: the mention re-check reads just
+        // the sources that moved, and the inbound map is one pass over the
+        // already-resolved link graph. A batch during which nothing happens pays
+        // nothing at all.
+        let regates = 0;
+        while (this.mutationEpoch !== live.epoch && regates < MAX_REGATES && !this.unloaded) {
+          live = await this.openTrashGate(remaining(paths, path), issues);
+          regates++;
+        }
+        if (this.unloaded) {
+          interrupted = true;
+          break;
+        }
+        // The vault would not hold still long enough to verify this file (a sync
+        // storm). Not verified means not trashed.
+        if (this.mutationEpoch !== live.epoch) {
+          skipped++;
+          continue;
+        }
+        // Looked up again: the file may have been renamed or replaced while we
+        // awaited. A different TFile (or a size change) means the hash above no
+        // longer describes it, so the identity record would be wrong.
+        const file = this.app.vault.getFileByPath(path);
+        if (
+          !file ||
+          file !== preHashFile ||
+          file.stat.size !== sizeBytes ||
+          file.stat.mtime !== mtime
+        ) {
+          // Modified while we read it: the hash no longer describes these bytes.
+          skipped++;
+          continue;
+        }
+        // Skip anything newly referenced (by link OR content) or not confirmed unused.
+        if (!live.eligible.has(path) || live.mentioned.has(path)) {
+          skipped++;
+          continue;
+        }
+        // Action-specific last word, evaluated synchronously so nothing can land
+        // between it and the trash (duplicate cleanup re-proves its survivor here).
+        if (verify && !verify(path)) {
+          skipped++;
+          continue;
+        }
         await this.app.fileManager.trashFile(file);
         trashed.push(path);
-        await this.recordInBatch(batch, { from: path, sizeBytes, mtime, headHash });
+        await this.recordInBatch(batch, {
+          from: path,
+          sizeBytes,
+          mtime,
+          headHash: hashes?.head,
+          fullHash: hashes?.full,
+        });
       } catch (err) {
         console.error(`Attachment Audit: could not trash ${path}`, err);
         failed++;
       }
+      // The recovery record can no longer be written: stop mutating.
+      if (batch.saveFailed) break;
     }
 
     const reclaimed = trashed.reduce((sum, p) => sum + (bytesByPath.get(p) ?? 0), 0);
     await this.closeJournalBatch(batch);
     this.reportBulk("Trashed", trashed.length, skipped, failed, reclaimed);
+    this.reportJournalSaveFailure(batch, "the files just trashed");
     if (batch.unrecorded > 0) {
       new Notice(
         `${PRODUCT_NAME}: ${plural(batch.unrecorded, "file")} could not be added to the cleanup history and ${batch.unrecorded === 1 ? "is" : "are"} not restorable from here — look in the trash.`,
@@ -1150,17 +1305,27 @@ export default class AttachmentManagerPlugin extends Plugin {
         // path, the undo relocated a stranger — and rewrote every link in the
         // vault to point at it. The machinery to prevent that already existed and
         // was simply not wired here.
-        const headHash = await this.maybeHashHead(file);
+        const hashes = await this.maybeHashFile(file);
         await this.app.fileManager.renameFile(file, target);
         moved.push(target);
-        await this.recordInBatch(batch, { from: path, to: target, sizeBytes, mtime, headHash });
+        await this.recordInBatch(batch, {
+          from: path,
+          to: target,
+          sizeBytes,
+          mtime,
+          headHash: hashes?.head,
+          fullHash: hashes?.full,
+        });
       } catch (err) {
         console.error(`Attachment Audit: could not move ${path}`, err);
         failed++;
       }
+      // The undo record can no longer be written: stop moving things.
+      if (batch.saveFailed) break;
     }
     await this.closeJournalBatch(batch);
     this.reportBulk("Moved", moved.length, skipped, failed);
+    this.reportJournalSaveFailure(batch, "the files just moved");
     if (interrupted) {
       new Notice(`${PRODUCT_NAME}: move stopped early because the plugin was unloaded.`);
     }
@@ -1209,7 +1374,7 @@ export default class AttachmentManagerPlugin extends Plugin {
     const mtime = file.stat.mtime;
     // Taken BEFORE the rename, so `reverseMove` can verify identity by content
     // rather than by size alone.
-    const headHash = await this.maybeHashHead(file);
+    const hashes = await this.maybeHashFile(file);
     try {
       await this.app.fileManager.renameFile(file, target);
     } catch (err) {
@@ -1222,8 +1387,14 @@ export default class AttachmentManagerPlugin extends Plugin {
     // so the user was told "rename failed" about a file that HAD been renamed and
     // the caller skipped its refresh, leaving the dashboard pointing at a path
     // that no longer existed. `recordBatch` now swallows its own write errors.
-    await this.recordBatch("rename", [{ from: path, to: target, sizeBytes, mtime, headHash }]);
-    new Notice(`${PRODUCT_NAME}: renamed to ${attachmentBaseName(target)}.`);
+    const recorded = await this.recordBatch("rename", [
+      { from: path, to: target, sizeBytes, mtime, headHash: hashes?.head, fullHash: hashes?.full },
+    ]);
+    new Notice(
+      recorded
+        ? `${PRODUCT_NAME}: renamed to ${attachmentBaseName(target)}.`
+        : `${PRODUCT_NAME}: renamed to ${attachmentBaseName(target)}, but the cleanup history could not be saved, so this rename may not be undoable from here after a restart.`
+    );
     return target;
   }
 
@@ -1238,8 +1409,8 @@ export default class AttachmentManagerPlugin extends Plugin {
     op: CleanupOp,
     entries: JournalEntry[],
     trashDestination?: TrashDestination
-  ): Promise<void> {
-    if (entries.length === 0 || this.settings.journalLimit <= 0) return;
+  ): Promise<boolean> {
+    if (entries.length === 0 || this.settings.journalLimit <= 0) return true;
     const batch: JournalBatch = {
       id: newId("batch"),
       at: new Date().toISOString(),
@@ -1248,7 +1419,7 @@ export default class AttachmentManagerPlugin extends Plugin {
       entries,
     };
     this.settings.journal = appendBatch(this.settings.journal, batch, this.settings.journalLimit);
-    await this.saveJournal();
+    return await this.saveJournal();
   }
 
   /**
@@ -1270,6 +1441,8 @@ export default class AttachmentManagerPlugin extends Plugin {
       pending: 0,
       unrecorded: 0,
       full: false,
+      saveFailed: false,
+      saveRecovered: false,
     };
   }
 
@@ -1305,17 +1478,48 @@ export default class AttachmentManagerPlugin extends Plugin {
     }
     open.pending++;
     if (open.pending >= JOURNAL_FLUSH_EVERY) {
-      open.pending = 0;
-      await this.saveJournal();
+      // `pending` is only cleared on SUCCESS, so a failed flush is retried by
+      // `closeJournalBatch` rather than forgotten.
+      if (await this.saveJournal()) open.pending = 0;
+      else open.saveFailed = true;
     }
   }
 
   /** Persist whatever the batch collected. Safe to call on an empty batch. */
   private async closeJournalBatch(open: OpenBatch): Promise<void> {
     if (open.attached && open.pending > 0) {
-      open.pending = 0;
-      await this.saveJournal();
+      if (await this.saveJournal()) {
+        open.pending = 0;
+        // The retry wrote everything this batch recorded, so its history IS
+        // durable now — only the early stop still needs explaining.
+        if (open.saveFailed) {
+          open.saveFailed = false;
+          open.saveRecovered = true;
+        }
+      } else open.saveFailed = true;
     }
+  }
+
+  /**
+   * Tell the user the history for this action could not be written. A swallowed
+   * write error used to leave a cleanup that looked normal and restorable in the
+   * dashboard right up until the next restart, when its record was simply gone.
+   */
+  private reportJournalSaveFailure(open: OpenBatch, what: string): void {
+    if (open.saveRecovered) {
+      new Notice(
+        `${PRODUCT_NAME}: the cleanup history briefly could not be saved, so the action was stopped early. ` +
+          `Everything done so far is recorded and restorable. See the console for the cause.`,
+        10000
+      );
+      return;
+    }
+    if (!open.saveFailed) return;
+    new Notice(
+      `${PRODUCT_NAME}: the cleanup history could not be saved, so ${what} may not be restorable from here after a restart. ` +
+        "The action was stopped early. See the console for the cause.",
+      15000
+    );
   }
 
   /**
@@ -1328,11 +1532,13 @@ export default class AttachmentManagerPlugin extends Plugin {
    * the confirm dialog close and nothing else happen while their attachments
    * disappeared. An unrecorded cleanup is bad; an unreported one is worse.
    */
-  private async saveJournal(): Promise<void> {
+  private async saveJournal(): Promise<boolean> {
     try {
       await this.saveSettings();
+      return true;
     } catch (err) {
       console.error("Attachment Audit: could not write the cleanup history", err);
+      return false;
     }
   }
 
@@ -1373,6 +1579,7 @@ export default class AttachmentManagerPlugin extends Plugin {
     this.restoringBatches.add(batchId);
     const landedAt: string[] = [];
     const reasons: string[] = [];
+    const unindexed: string[] = [];
     // Walk `.trash` ONCE for the whole batch. Listing it per entry made a
     // 500-file restore do 500 recursive walks of a directory holding everything
     // the user has ever deleted.
@@ -1435,6 +1642,7 @@ export default class AttachmentManagerPlugin extends Plugin {
           if (outcome.path) {
             restored.push(entry.from);
             landedAt.push(outcome.path);
+            if (outcome.unindexed) unindexed.push(outcome.path);
             restoredTo.set(entry.from, outcome.path);
           } else {
             failed.push(entry.from);
@@ -1482,7 +1690,17 @@ export default class AttachmentManagerPlugin extends Plugin {
       const why = reasons.length > 0 ? ` (${reasons.join("; ")})` : " — see the console";
       parts.push(`${failed.length} could not be put back${why}`);
     }
-    new Notice(`${PRODUCT_NAME}: ${parts.join(", ")}.`, failed.length > 0 ? 10000 : undefined);
+    if (unindexed.length > 0) {
+      parts.push(
+        `${unindexed.length} ${unindexed.length === 1 ? "is" : "are"} back on disk but Obsidian has not picked ` +
+          `${unindexed.length === 1 ? "it" : "them"} up yet (${unindexed.slice(0, 2).join(", ")}) — reload Obsidian if ` +
+          `${unindexed.length === 1 ? "it does" : "they do"} not appear`
+      );
+    }
+    new Notice(
+      `${PRODUCT_NAME}: ${parts.join(", ")}.`,
+      failed.length > 0 || unindexed.length > 0 ? 10000 : undefined
+    );
     if (landedAt.length > 0) await this.settleCacheThenRescan(landedAt);
     else this.refreshViews();
     return { restored, failed };
@@ -1505,9 +1723,12 @@ export default class AttachmentManagerPlugin extends Plugin {
     // Size is circumstantial; content is not. When the move recorded a head hash,
     // it has to match, or the file sitting at that path is not the one we moved
     // and undoing would relocate a stranger and re-point the vault's links at it.
-    if (entry.headHash !== undefined) {
-      const now = await this.maybeHashHead(file);
-      if (now !== entry.headHash) {
+    if (entry.headHash !== undefined || entry.fullHash !== undefined) {
+      const now = await this.maybeHashFile(file);
+      if (
+        (entry.headHash !== undefined && now?.head !== entry.headHash) ||
+        (entry.fullHash !== undefined && now?.full !== entry.fullHash)
+      ) {
         return { path: null, reason: "the file there is not the one that was moved, so it was left alone" };
       }
     }
@@ -1551,13 +1772,19 @@ export default class AttachmentManagerPlugin extends Plugin {
         if (!stat || stat.type !== "file") continue;
         // Hash only size-matching candidates: it is the decisive check, but it
         // reads bytes, so it is not worth paying for a file already excluded.
-        const headHash =
+        const hashes =
           stat.size === entry.sizeBytes &&
-          entry.headHash !== undefined &&
+          (entry.headHash !== undefined || entry.fullHash !== undefined) &&
           stat.size <= HASH_MAX_BYTES
-            ? await this.hashHead(adapter, path)
+            ? await this.hashFile(adapter, path)
             : undefined;
-        candidates.push({ path, size: stat.size, mtime: stat.mtime, headHash });
+        candidates.push({
+          path,
+          size: stat.size,
+          mtime: stat.mtime,
+          headHash: hashes?.head,
+          fullHash: hashes?.full,
+        });
       } catch {
         /* unreadable: cannot be identified, so it cannot be a match */
       }
@@ -1570,6 +1797,7 @@ export default class AttachmentManagerPlugin extends Plugin {
         sizeBytes: entry.sizeBytes,
         mtime: entry.mtime,
         headHash: entry.headHash,
+        fullHash: entry.fullHash,
       },
       { requireContentMatch }
     );
@@ -1610,7 +1838,12 @@ export default class AttachmentManagerPlugin extends Plugin {
     if (outcome.found.size > RESTORE_COPY_MAX_BYTES) {
       try {
         await adapter.rename(outcome.found.path, target);
-        return { path: target };
+        // `adapter.rename` bypasses the vault index. The desktop file watcher
+        // usually picks the file up within a moment; mobile adapters have no
+        // watcher. Wait briefly, and say so if it still has not appeared, rather
+        // than reporting a restore the vault cannot see.
+        const indexed = await this.waitForIndexed(target, 3000);
+        return { path: target, unindexed: !indexed };
       } catch (err) {
         console.error(`Attachment Audit: could not move ${outcome.found.path} back`, err);
         return { path: null, reason: "it was too large to put back automatically" };
@@ -1676,19 +1909,28 @@ export default class AttachmentManagerPlugin extends Plugin {
     return out;
   }
 
+
   /**
-   * SHA-256 of a file's leading bytes — the identity check that does not depend
-   * on anything undocumented. See {@link JournalEntry.headHash}.
+   * SHA-256 of a file's leading bytes AND of the whole file, from one read — the
+   * identity checks that do not depend on anything undocumented. See
+   * {@link JournalEntry.headHash} and {@link JournalEntry.fullHash}.
+   *
+   * Head hash AND whole-file hash from one read. There is no ranged read, so the
+   * whole file is in memory either way; the second digest costs CPU only, and it
+   * is what lets the restore selector prove candidates byte-identical instead of
+   * guessing from a shared preamble.
    */
-  private async hashHead(adapter: DataAdapter, path: string): Promise<string | undefined> {
+  private async hashFile(
+    adapter: DataAdapter,
+    path: string
+  ): Promise<{ head: string; full: string } | undefined> {
     try {
       const buf = await adapter.readBinary(path);
       const head = buf.byteLength > HEAD_HASH_BYTES ? buf.slice(0, HEAD_HASH_BYTES) : buf;
-      const digest = await crypto.subtle.digest("SHA-256", head);
-      const bytes = new Uint8Array(digest);
-      let hex = "";
-      for (let i = 0; i < bytes.length; i++) hex += bytes[i].toString(16).padStart(2, "0");
-      return hex;
+      const headHex = toHex(await crypto.subtle.digest("SHA-256", head));
+      const fullHex =
+        head === buf ? headHex : toHex(await crypto.subtle.digest("SHA-256", buf));
+      return { head: headHex, full: fullHex };
     } catch {
       return undefined;
     }
@@ -1701,10 +1943,20 @@ export default class AttachmentManagerPlugin extends Plugin {
    * `recordBatch` anyway) and above {@link HASH_MAX_BYTES}, because there is no
    * ranged read — hashing 64 KB of a 4 GB video still reads 4 GB.
    */
-  private async maybeHashHead(file: TFile): Promise<string | undefined> {
+  private async maybeHashFile(file: TFile): Promise<{ head: string; full: string } | undefined> {
     if (this.settings.journalLimit <= 0) return undefined;
     if (file.stat.size > HASH_MAX_BYTES) return undefined;
-    return this.hashHead(this.app.vault.adapter, file.path);
+    return this.hashFile(this.app.vault.adapter, file.path);
+  }
+
+  /** Poll the vault index for `path` for up to `timeoutMs`. */
+  private async waitForIndexed(path: string, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.app.vault.getFileByPath(path) === null) {
+      if (this.unloaded || Date.now() >= deadline) return false;
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
+    }
+    return true;
   }
 
   /** Recreate the folder a restored file used to live in, if it has since gone. */
@@ -1852,7 +2104,14 @@ export default class AttachmentManagerPlugin extends Plugin {
     if (count <= 0) return;
     this.settings.reclaimedTotalBytes += bytes;
     if (single) this.settings.singleTrashCount += count;
-    await this.saveSettings();
+    // Bookkeeping only, and the files are already gone: a failed write here must
+    // not throw out of the bulk action past its completion Notice and dashboard
+    // refresh (see `saveJournal`).
+    try {
+      await this.saveSettings();
+    } catch (err) {
+      console.error("Attachment Audit: could not save the reclaimed-space total", err);
+    }
 
     // Behavioral bulk upsell: they're doing Pro's job by hand. Offer once.
     if (

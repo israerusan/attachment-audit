@@ -2,6 +2,44 @@
 
 All notable changes to Attachment Audit are documented here. This project adheres to [Keep a Changelog](https://keepachangelog.com/) and [Semantic Versioning](https://semver.org/).
 
+## [1.3.3] - 2026-11-21
+
+A safety-fix release from an outside-model review (Copilot, Hermes, Codex).
+
+### Fixed — data loss
+
+- **A file that becomes referenced while its bytes are being read is no longer
+  trashed.** The live safety check ran *before* the plugin read the file to record
+  its identity, so a note arriving during that read (Obsidian Sync, another
+  device) was missed for that file. The check now runs after the read, right
+  before the trash, and a file the vault will not hold still long enough to verify
+  is skipped.
+- **A failed write of the cleanup history now stops the cleanup and tells you.**
+  A full disk, read-only vault or a sync client holding `data.json` used to fail
+  silently: the cleanup went on, looked restorable, and lost its undo record at
+  the next restart.
+- **Duplicate cleanup no longer counts an edited file as "the copy that's kept".**
+  Every copy in an affected group is now re-hashed when you run the cleanup and
+  must still match the scanned content, and is checked again right before each
+  file is trashed. A copy changed since the scan can neither be the survivor nor
+  be trashed as redundant. Very large duplicate groups no longer slow the cleanup
+  down quadratically.
+- **Undo can no longer swap two files that merely start the same way.** Two
+  trashed files with the same name, size and first 64 KB (common for container
+  formats) could be restored to each other's paths, and a lone look-alike could be
+  restored in place of a file that was gone. Cleanups now record a whole-file hash
+  (from the read they already did), and restore and undo-move require it to
+  match, or refuse. History recorded by earlier versions still restores, but when
+  two trashed look-alikes provably differ it now refuses instead of guessing by
+  filename — the file stays in `.trash` for you to restore by hand.
+
+### Fixed
+
+- Restoring a file over 64 MB now says so if Obsidian has not picked it up yet,
+  rather than reporting a clean restore of a file the vault cannot see.
+- Switching every detector off now survives a restart; it used to be reset to all
+  detectors on.
+
 ## [1.3.0] - 2026-10-15
 
 A hardening release. Five independent adversarial reviews plus two outside models

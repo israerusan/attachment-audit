@@ -285,7 +285,14 @@ export function normalizeSettings(
         typeof t === "string" && validTypes.has(t)
       )
     : [];
-  s.enabledIssueTypes = enabled.length > 0 ? enabled : [...defaults.enabledIssueTypes];
+  // An EMPTY array is a legitimate saved choice — the settings tab lets every
+  // detector be switched off and `runScan` reports that state explicitly — so it
+  // survives a reload. Defaults are restored only for a non-array, or for a
+  // non-empty array none of whose entries is a real detector (corruption).
+  const deliberatelyEmpty =
+    Array.isArray(s.enabledIssueTypes) && (s.enabledIssueTypes as unknown[]).length === 0;
+  s.enabledIssueTypes =
+    enabled.length > 0 || deliberatelyEmpty ? enabled : [...defaults.enabledIssueTypes];
 
   if (typeof s.sortMode !== "string" || !SORT_MODES.includes(s.sortMode as SortMode)) {
     s.sortMode = defaults.sortMode;

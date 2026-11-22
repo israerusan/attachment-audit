@@ -104,7 +104,32 @@ const c = (path: string, size: number, mtime = 1000): TrashCandidate => ({ path,
   assert.strictEqual(out.found, null, "unhashable candidate is not assumed to match");
 }
 // Two byte-identical candidates: restoring EITHER is correct, so pick one
-// rather than refusing. This is the duplicate-cleanup case by construction.
+// rather than refusing. This is the duplicate-cleanup case by construction —
+// and identity is now PROVEN by a whole-file hash, not inferred from the head.
+{
+  const out = selectTrashCandidate(
+    [
+      { path: ".trash/logo 1.png", size: 100, mtime: 1, headHash: "same", fullHash: "F" },
+      { path: ".trash/logo 2.png", size: 100, mtime: 2, headHash: "same", fullHash: "F" },
+    ],
+    { from: "a/logo.png", sizeBytes: 100, headHash: "same" }
+  );
+  assert.ok(out.found, "identical content means either is a correct restore");
+}
+// Same size and same leading bytes but DIFFERENT content (a shared container
+// preamble). Handing out the first one restored such files swapped and reported
+// success; it must refuse instead.
+{
+  const out = selectTrashCandidate(
+    [
+      { path: ".trash/logo 1.png", size: 100, mtime: 1, headHash: "same", fullHash: "F1" },
+      { path: ".trash/logo 2.png", size: 100, mtime: 2, headHash: "same", fullHash: "F2" },
+    ],
+    { from: "a/logo.png", sizeBytes: 100, headHash: "same" }
+  );
+  assert.strictEqual(out.found === null ? out.reason : "", "ambiguous", "a shared preamble is not identity");
+}
+// No whole-file hash available: cannot prove identity, so refuse.
 {
   const out = selectTrashCandidate(
     [
@@ -113,7 +138,82 @@ const c = (path: string, size: number, mtime = 1000): TrashCandidate => ({ path,
     ],
     { from: "a/logo.png", sizeBytes: 100, headHash: "same" }
   );
-  assert.ok(out.found, "identical content means either is a correct restore");
+  assert.strictEqual(out.found, null);
+}
+// Same batch trashed `a/logo.png` and `b/logo.png` (requireContentMatch), with a
+// shared preamble. The unsuffixed `.trash/logo.png` belongs to whichever was
+// trashed first, so it is NOT evidence for this entry and must not be preferred.
+{
+  const out = selectTrashCandidate(
+    [
+      { path: ".trash/logo.png", size: 100, mtime: 1, headHash: "same", fullHash: "F1" },
+      { path: ".trash/logo 1.png", size: 100, mtime: 2, headHash: "same", fullHash: "F2" },
+    ],
+    { from: "b/logo.png", sizeBytes: 100, headHash: "same" },
+    { requireContentMatch: true }
+  );
+  assert.strictEqual(out.found, null, "exact-name preference is skipped for a same-batch basename");
+}
+// Contents provably differ: the exact name is circumstantial (an older unrelated
+// `logo.png` in the trash pushes ours to `logo 1.png`), so it must not decide.
+{
+  const out = selectTrashCandidate(
+    [
+      { path: ".trash/logo.png", size: 100, mtime: 1, headHash: "same", fullHash: "F1" },
+      { path: ".trash/logo 1.png", size: 100, mtime: 2, headHash: "same", fullHash: "F2" },
+    ],
+    { from: "b/logo.png", sizeBytes: 100, headHash: "same" }
+  );
+  assert.strictEqual(out.found, null, "exact name does not override differing content");
+}
+// ...but a recorded mtime that singles one out still does — it is per-entry evidence.
+{
+  const out = selectTrashCandidate(
+    [
+      { path: ".trash/logo.png", size: 100, mtime: 1, headHash: "same", fullHash: "F1" },
+      { path: ".trash/logo 1.png", size: 100, mtime: 2, headHash: "same", fullHash: "F2" },
+    ],
+    { from: "b/logo.png", sizeBytes: 100, mtime: 2, headHash: "same" }
+  );
+  assert.strictEqual(out.found?.path, ".trash/logo 1.png");
+}
+// No content hashes at all (an old journal entry): exact name keeps its old role.
+{
+  const out = selectTrashCandidate(
+    [
+      { path: ".trash/logo.png", size: 100, mtime: 1 },
+      { path: ".trash/logo 1.png", size: 100, mtime: 2 },
+    ],
+    { from: "b/logo.png", sizeBytes: 100 }
+  );
+  assert.strictEqual(out.found?.path, ".trash/logo.png");
+}
+
+// --- Whole-file hash recorded at trash time (1.3.3+) -------------------------
+// A LONE candidate with the right size and first 64 KB was accepted as ours even
+// when the rest of its bytes differed. With a recorded whole-file hash it is not.
+{
+  const lone = selectTrashCandidate(
+    [{ path: ".trash/logo.png", size: 100, mtime: 1, headHash: "H", fullHash: "OTHER" }],
+    { from: "a/logo.png", sizeBytes: 100, headHash: "H", fullHash: "MINE" }
+  );
+  assert.strictEqual(lone.found === null ? lone.reason : "", "no-match", "a shared preamble is not our file");
+
+  const pick = selectTrashCandidate(
+    [
+      { path: ".trash/logo.png", size: 100, mtime: 1, headHash: "H", fullHash: "OTHER" },
+      { path: ".trash/logo 1.png", size: 100, mtime: 2, headHash: "H", fullHash: "MINE" },
+    ],
+    { from: "a/logo.png", sizeBytes: 100, headHash: "H", fullHash: "MINE" },
+    { requireContentMatch: true }
+  );
+  assert.strictEqual(pick.found?.path, ".trash/logo 1.png", "the whole-file hash decides, even over the exact name");
+
+  const unhashed = selectTrashCandidate(
+    [{ path: ".trash/logo.png", size: 100, mtime: 1, headHash: "H" }],
+    { from: "a/logo.png", sizeBytes: 100, headHash: "H", fullHash: "MINE" }
+  );
+  assert.strictEqual(unhashed.found, null, "a candidate that could not be fully hashed is not trusted");
 }
 
 // --- Unicode ----------------------------------------------------------------

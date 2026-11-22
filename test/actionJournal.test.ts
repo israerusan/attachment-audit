@@ -269,4 +269,26 @@ console.log("actionJournal tests passed");
   assert.strictEqual(only.entries[0].mtime, undefined);
 }
 
+// --- fullHash round-trips; junk is dropped; old entries stay valid ----------
+{
+  const [b] = normalizeJournal(
+    [
+      {
+        id: "f",
+        at: "2026-11-21T00:00:00.000Z",
+        op: "trash",
+        entries: [
+          { from: "a.png", sizeBytes: 1, headHash: "h", fullHash: "F" },
+          { from: "b.png", sizeBytes: 1, headHash: "h", fullHash: 7 },
+          { from: "c.png", sizeBytes: 1, headHash: "h" },
+        ],
+      },
+    ],
+    10
+  );
+  assert.strictEqual(b.entries[0].fullHash, "F");
+  assert.strictEqual(b.entries[1].fullHash, undefined, "a non-string hash is dropped, not trusted");
+  assert.strictEqual(b.entries[2].fullHash, undefined, "a pre-1.3.3 entry still loads");
+}
+
 console.log("actionJournal headHash/restoredTo tests passed");

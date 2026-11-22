@@ -115,6 +115,16 @@ assert.deepStrictEqual(empty.enabledIssueTypes, DEFAULT_SETTINGS.enabledIssueTyp
 assert.strictEqual(empty.version, SCHEMA_VERSION);
 assert.strictEqual(empty.licenseKey, "");
 
+// --- Every detector switched off is a saved choice, not corruption ---------
+// The settings tab allows it and `runScan` reports it, but a reload used to
+// rewrite `[]` to every default detector, silently undoing the user's choice.
+assert.deepStrictEqual(load({ enabledIssueTypes: [] }).enabledIssueTypes, []);
+// ...while a non-empty array of nothing recognisable is still corruption.
+assert.deepStrictEqual(
+  load({ enabledIssueTypes: ["nope", 7] }).enabledIssueTypes,
+  DEFAULT_SETTINGS.enabledIssueTypes
+);
+
 console.log("normalizeSettings tests passed");
 
 // --- Profile CONTENTS must be validated, not just their id ------------------

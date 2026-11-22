@@ -23,6 +23,12 @@ export interface TrashCandidate {
   mtime: number;
   /** SHA-256 of the leading bytes, computed lazily only for size-matching files. */
   headHash?: string;
+  /**
+   * SHA-256 of the WHOLE file, when it was read anyway to take `headHash`. Used
+   * only to prove that several remaining candidates are byte-identical, which is
+   * the one condition under which picking any of them is correct.
+   */
+  fullHash?: string;
 }
 
 /** What we are trying to find, from the journal entry that recorded the trash. */
@@ -35,6 +41,8 @@ export interface RestoreTarget {
   mtime?: number;
   /** Content hash of the leading bytes at the moment it was trashed. */
   headHash?: string;
+  /** Whole-file content hash at the moment it was trashed (1.3.3+ entries). */
+  fullHash?: string;
 }
 
 export type CandidateOutcome =
@@ -219,27 +227,48 @@ export function selectTrashCandidate(
     pool = hashed.filter((c) => c.headHash === target.headHash);
     if (pool.length === 0) return { found: null, reason: "no-match" };
   }
+  // Gate 3 — the WHOLE file, when the entry recorded it. Decisive: a candidate
+  // that fails it is not our file however well everything else lines up (a
+  // shared 64 KB preamble passed Gate 2), and every candidate that passes it IS
+  // our bytes, so any of them is a correct restore.
+  if (target.fullHash !== undefined) {
+    pool = pool.filter((c) => c.fullHash !== undefined && c.fullHash === target.fullHash);
+    if (pool.length === 0) return { found: null, reason: "no-match" };
+    return { found: pool[0] };
+  }
   if (pool.length === 1) return { found: pool[0] };
 
-  // Several survivors. Prefer the exact filename over a collision-suffixed one:
-  // it is strictly stronger evidence, and refusing when we have it would be
-  // over-cautious.
-  const exactName = pool.filter((c) => normalizeName(baseName(c.path)) === wantedName);
-  if (exactName.length === 1) return { found: exactName[0] };
+  // Several survivors with the same size and the same leading bytes. If every one
+  // of them is provably the SAME bytes (whole-file hash), restoring any of them is
+  // correct — the genuine-duplicates case — so settle it here, before anything
+  // circumstantial gets a vote.
+  const fullsKnown = target.headHash !== undefined && pool.every((c) => c.fullHash !== undefined);
+  if (fullsKnown && pool.every((c) => c.fullHash === pool[0].fullHash)) return { found: pool[0] };
+  // ...and if they provably DIFFER, the head hash could not separate them (a
+  // shared preamble: container formats, generated media), so only genuine
+  // per-entry evidence may decide. Handing out the first one restored such files
+  // SWAPPED and reported success.
+  const contentDiffers = fullsKnown;
+
+  // Prefer the exact filename over a collision-suffixed one — but only where the
+  // contents could not be told apart. A filename is circumstantial: if `.trash`
+  // already held an older `logo.png`, OURS landed as `logo 1.png`, and preferring
+  // the exact name hands back the stranger. Skipped, too, when this batch trashed
+  // the same basename more than once: the unsuffixed name then belongs to
+  // whichever entry was trashed first (see `requireContentMatch` above).
+  if (!options?.requireContentMatch && !contentDiffers) {
+    const exactName = pool.filter((c) => normalizeName(baseName(c.path)) === wantedName);
+    if (exactName.length === 1) return { found: exactName[0] };
+  }
 
   // mtime is only ever a TIEBREAK, never a gate — whether the trash preserves it
-  // is unverified, so a mismatch cannot be treated as evidence of anything.
+  // is unverified, so a mismatch cannot be treated as evidence of anything. A
+  // unique MATCH is evidence, though: it was recorded for this entry alone.
   if (target.mtime !== undefined) {
     const sameTime = pool.filter((c) => c.mtime === target.mtime);
     if (sameTime.length === 1) return { found: sameTime[0] };
   }
 
-  // Everything still standing has the same size AND the same leading bytes. That
-  // is not a proof of byte-equality — two large files can share a preamble — but
-  // it is far stronger evidence than name alone, and the realistic case that
-  // reaches here is genuine duplicates, where restoring either is correct.
-  // Refusing instead would make duplicate cleanup unrestorable, which is worse.
-  if (target.headHash !== undefined) return { found: pool[0] };
   return { found: null, reason: "ambiguous" };
 }
 

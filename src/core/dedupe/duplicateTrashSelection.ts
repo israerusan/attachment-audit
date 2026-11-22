@@ -30,20 +30,23 @@ export function selectDuplicateCopiesToTrash(
   inbound: ReadonlyMap<string, number>,
   stillExists?: (path: string) => boolean
 ): string[] {
-  const membersByCluster = new Map<string, string[]>();
+  // Sets, not arrays with `includes`: the duplicate action re-runs this per file
+  // for that file's cluster, and a pathological cluster (thousands of identical
+  // files from a broken sync) made the quadratic version cubic across a batch.
+  const membersByCluster = new Map<string, Set<string>>();
   for (const i of allIssues) {
     if (i.issueType === "duplicate" && i.clusterId) {
-      const b = membersByCluster.get(i.clusterId) ?? [];
-      if (!b.includes(i.attachmentPath)) b.push(i.attachmentPath);
+      const b = membersByCluster.get(i.clusterId) ?? new Set<string>();
+      b.add(i.attachmentPath);
       membersByCluster.set(i.clusterId, b);
     }
   }
 
-  const selectedByCluster = new Map<string, string[]>();
+  const selectedByCluster = new Map<string, Set<string>>();
   for (const i of selected) {
     if (i.issueType !== "duplicate" || !i.clusterId) continue;
-    const b = selectedByCluster.get(i.clusterId) ?? [];
-    if (!b.includes(i.attachmentPath)) b.push(i.attachmentPath);
+    const b = selectedByCluster.get(i.clusterId) ?? new Set<string>();
+    b.add(i.attachmentPath);
     selectedByCluster.set(i.clusterId, b);
   }
 
@@ -51,16 +54,18 @@ export function selectDuplicateCopiesToTrash(
   for (const [cid, sel] of selectedByCluster) {
     const members = membersByCluster.get(cid) ?? sel;
     // Eligible = selected copies that are two-signal unused AND still unreferenced.
-    const eligible = sel.filter(
+    const eligible = [...sel].filter(
       (p) => unused.has(p) && (inbound.get(p) ?? 0) <= 0 && (stillExists?.(p) ?? true)
     );
+    const eligibleSet = new Set(eligible);
     // A survivor only counts if the file is actually still on disk.
-    const survivors = members.filter(
-      (p) => !eligible.includes(p) && (stillExists?.(p) ?? true)
-    );
+    let survivors = 0;
+    for (const p of members) {
+      if (!eligibleSet.has(p) && (stillExists?.(p) ?? true)) survivors++;
+    }
     let trashList = eligible;
     // Never remove the last surviving copy of the content.
-    if (survivors.length === 0 && trashList.length > 0) trashList = trashList.slice(1);
+    if (survivors === 0 && trashList.length > 0) trashList = trashList.slice(1);
     toTrash.push(...trashList);
   }
   return toTrash;
