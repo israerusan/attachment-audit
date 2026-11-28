@@ -2,6 +2,40 @@
 
 All notable changes to Attachment Audit are documented here. This project adheres to [Keep a Changelog](https://keepachangelog.com/) and [Semantic Versioning](https://semver.org/).
 
+## [1.3.4] - 2026-11-28
+
+Fixes from an outside-model review (Grok, Copilot).
+
+### Fixed — data loss
+
+- **Duplicate cleanup re-reads the vault's links after hashing.** The link map was
+  taken before the copies were hashed, so a note that embedded a copy during that
+  read (`![[logo]]`, written without its extension, is visible only in Obsidian's
+  resolved links) reached the safety check with no inbound link. A link that
+  resolves while a cleanup runs now also triggers the live re-check.
+
+### Fixed
+
+- **Large camera raw files no longer switch off unused detection.** `.cr3`, `.rw2`,
+  `.pef`, `.3fr`, `.iiq` and other raw formats were read as possible reference
+  sources; one over 48 MB made the scan treat every candidate as mentioned, so
+  the vault reported no unused attachments. They are now skipped as binary, like
+  `.cr2` and `.nef` already were.
+- **Turning off every detector now warns instead of reporting a clean vault.**
+  The scan kept the custom-rule type enabled, which finds nothing without Pro and
+  an enabled rule, so it ran and replaced your last results with an empty "tidy"
+  scan. It now warns and keeps the previous results.
+- **Open in the review queue works on a broken link.** It tried to open the
+  missing file and did nothing; it now opens the note that contains the link, as
+  the results list does.
+- **Deleting a custom rule removes it from saved profiles.** A profile whose only
+  selected rule was deleted kept a dangling id; it now has custom rules switched
+  off, which is what the profile editor saves for an empty selection. (A profile
+  that ran only custom rules is left as it is, and its scan says no detectors are
+  enabled.)
+- A "larger than" rule with a 0 or negative size in a hand-edited `data.json` no
+  longer matches every attachment; the threshold is clamped to at least 1 KB.
+
 ## [1.3.3] - 2026-11-21
 
 A safety-fix release from an outside-model review (Copilot, Hermes, Codex).

@@ -186,7 +186,15 @@ export class ReviewQueueModal extends Modal {
 
   private async openCurrent(): Promise<void> {
     const issue = this.current();
-    if (issue) await this.plugin.openAttachment(issue.attachmentPath);
+    if (!issue) return;
+    // A broken link has no file to open; open the note that contains it, exactly as
+    // the results list does.
+    if (issue.exists === false) {
+      const source = issue.referencedBy?.[0];
+      if (source) await this.plugin.openAttachment(source);
+      return;
+    }
+    await this.plugin.openAttachment(issue.attachmentPath);
   }
 
   private async toggleReviewed(): Promise<void> {

@@ -267,6 +267,13 @@ export default class AttachmentManagerPlugin extends Plugin {
     this.registerEvent(
       this.app.vault.on("create", (file) => this.noteSourceChanged(file.path))
     );
+    // `modify` fires BEFORE Obsidian re-resolves the note's links, and an embed
+    // written without its extension (`![[logo]]`) is visible ONLY in resolvedLinks —
+    // the mention pass looks for `logo.png`. A link that resolves mid-batch must move
+    // the epoch too, or a destructive loop keeps trusting a link map that predates it.
+    this.registerEvent(
+      this.app.metadataCache.on("resolve", (file) => this.noteSourceChanged(file.path))
+    );
 
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
@@ -465,6 +472,18 @@ export default class AttachmentManagerPlugin extends Plugin {
       return;
     }
 
+    // Checked BEFORE anything is reset: `custom` alone detects nothing unless Pro is
+    // active with an enabled rule. Switching off all six built-in toggles used to leave
+    // ["custom"], run, and replace the previous results with a "tidy" empty scan.
+    const config = resolveScanConfig(this.settings, profile);
+    const anyDetector = config.enabledIssueTypes.some(
+      (t) => t !== "custom" || (this.isPro && config.customRules.some((r) => r.enabled))
+    );
+    if (!anyDetector) {
+      new Notice(`${PRODUCT_NAME}: no detectors are enabled — turn some on in settings.`);
+      return;
+    }
+
     this.scanning = true;
     this.scanDone = 0;
     this.scanTotal = 0;
@@ -479,7 +498,6 @@ export default class AttachmentManagerPlugin extends Plugin {
     this.refreshViews();
 
     try {
-      const config = resolveScanConfig(this.settings, profile);
       const now = Date.now();
       const { issues, totalFiles } = await scanVault(
         this.app,
@@ -514,9 +532,7 @@ export default class AttachmentManagerPlugin extends Plugin {
       if (!profileId) this.pruneKeys();
       await this.saveSettings();
 
-      if (config.enabledIssueTypes.length === 0) {
-        new Notice(`${PRODUCT_NAME}: no detectors are enabled — turn some on in settings.`);
-      } else {
+      {
         const affected = new Set(outstanding.map((i) => i.attachmentPath)).size;
         const reclaimText = outstandingReclaim.unusedBytes > 0
           ? ` — ${formatBytes(outstandingReclaim.unusedBytes)} reclaimable`
@@ -770,6 +786,27 @@ export default class AttachmentManagerPlugin extends Plugin {
 
   async deleteRule(id: string): Promise<void> {
     this.settings.customRules = this.settings.customRules.filter((r) => r.id !== id);
+    // A saved profile that selected this rule would otherwise keep a dangling id. If it
+    // was the profile's only selected rule, the profile silently ran NO custom rules.
+    // When no selected rule is left, the profile gets what its editor saves for an
+    // empty selection: custom rules OFF — never "every remaining rule".
+    for (const profile of this.settings.savedProfiles) {
+      if (!profile.customRuleIds?.includes(id)) continue;
+      const kept = profile.customRuleIds.filter((r) => r !== id);
+      if (kept.length > 0) {
+        profile.customRuleIds = kept;
+      } else {
+        const nextTypes = (profile.enabledIssueTypes ?? this.settings.enabledIssueTypes).filter(
+          (t) => t !== "custom"
+        );
+        // A custom-only profile would be left with no detectors — a state the editor
+        // refuses and the loader turns back into "every detector". Leave it as it is:
+        // its dangling id selects no live rule, so it runs nothing and says so.
+        if (nextTypes.length === 0) continue;
+        profile.customRuleIds = undefined;
+        profile.enabledIssueTypes = nextTypes;
+      }
+    }
     await this.saveSettings();
   }
 
@@ -1070,7 +1107,10 @@ export default class AttachmentManagerPlugin extends Plugin {
       return null;
     };
 
-    const gate = await this.openTrashGate(toTrash, selected, inbound, unused);
+    // The link map is re-read HERE, not reused from before the hashing above: a note
+    // linked to a copy while it was being hashed would otherwise reach the gate with
+    // an inbound count of 0, under an epoch snapshot taken after that change landed.
+    const gate = await this.openTrashGate(toTrash, selected, this.inboundMap(), unused);
     return await this.trashGatedPaths(toTrash, gate, selected, false, proveRedundant);
   }
 

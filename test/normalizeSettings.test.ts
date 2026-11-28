@@ -163,6 +163,26 @@ assert.strictEqual(load({ savedProfiles: [{ id: "p" }] }).savedProfiles[0].name,
 assert.strictEqual(load({ savedProfiles: [{ id: "p", sortMode: "junk" }] }).savedProfiles[0].sortMode, undefined);
 assert.strictEqual(load({ savedProfiles: [{ id: "p", sortMode: "size" }] }).savedProfiles[0].sortMode, "size");
 
+// A 0 / negative size threshold made a "larger than" rule match every file.
+{
+  const rules = load({
+    customRules: [
+      { id: "neg", condition: { type: "larger-than-kb", kb: -1 } },
+      { id: "zero", condition: { type: "larger-than-kb", kb: 0 } },
+      { id: "nan", condition: { type: "larger-than-kb", kb: "x" } },
+      { id: "ok", condition: { type: "larger-than-kb", kb: 500 } },
+    ],
+  }).customRules;
+  const kb = (id: string): number => {
+    const c = rules.find((r) => r.id === id)?.condition;
+    return c?.type === "larger-than-kb" ? c.kb : NaN;
+  };
+  assert.strictEqual(kb("neg"), 1, "negative kb clamps to 1");
+  assert.strictEqual(kb("zero"), 1, "zero kb clamps to 1");
+  assert.strictEqual(kb("nan"), Number.MAX_SAFE_INTEGER, "non-numeric kb is inert");
+  assert.strictEqual(kb("ok"), 500, "a valid kb is kept");
+}
+
 // --- Custom rule contents ---------------------------------------------------
 {
   const rules = load({

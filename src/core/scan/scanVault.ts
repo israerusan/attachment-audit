@@ -110,7 +110,9 @@ const BINARY_ATTACHMENT_EXTS = new Set([
   // images
   "png", "jpg", "jpeg", "jfif", "gif", "bmp", "webp", "avif", "heic", "heif",
   "tiff", "tif", "ico", "icns", "psd", "psb", "xcf", "raw", "cr2", "nef", "arw",
-  "dng", "orf", "raf", "sr2",
+  "dng", "orf", "raf", "sr2", "cr3", "crw", "rw2", "pef", "srw", "3fr", "fff",
+  "iiq", "nrw", "x3f", "erf", "mrw", "kdc", "dcr", "mef", "mos", "rwl", "srf",
+  "bay", "cap", "ari", "r3d", "braw",
   // audio
   "mp3", "wav", "wave", "m4a", "ogg", "oga", "opus", "flac", "aac", "aiff", "aif",
   "wma", "mid", "midi", "amr", "ape",

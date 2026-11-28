@@ -151,7 +151,9 @@ function normalizeRule(raw: RawSettings, defaults: AttachmentManagerSettings): C
     case "larger-than-kb":
       condition = {
         type: "larger-than-kb",
-        kb: typeof rawCondition.kb === "number" && Number.isFinite(rawCondition.kb) ? rawCondition.kb : 0,
+        // At least 1 KB, as the rule editor enforces: a 0 or negative threshold from a
+        // hand-edited data.json made the rule match every non-empty attachment.
+        kb: clampNumber(rawCondition.kb, Number.MAX_SAFE_INTEGER, 1, Number.MAX_SAFE_INTEGER),
       };
       break;
     case "in-folder":
